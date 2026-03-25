@@ -7,7 +7,7 @@ import os
 import urllib.parse
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # 파이썬 순정 XML 파서 탑재!
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -66,8 +66,8 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 5. 로컬 누적 DB (찌꺼기 제거 및 초기화를 위해 v10으로 명명)
-DB_FILE = "aagig_db_v10.json"
+# 5. 로컬 누적 DB (빈칸 찌꺼기 초기화를 위해 v5로 변경)
+DB_FILE = "aagig_db_v5.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -79,7 +79,7 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 6. 클라우드 IP 차단 우회 엔진 (v44.0 순정 XML 파서 복구)
+# 6. 클라우드 IP 차단 우회 엔진 (파이썬 순정 XML 파서 적용)
 @st.cache_data(ttl=300)
 def update_articles():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
@@ -106,7 +106,7 @@ def update_articles():
             
             r = requests.get(url, headers=headers, timeout=5)
             
-            # v44.0의 핵심: 순정 XML 파서 (링크 증발 버그 없음)
+            # [핵심 수정] 파이썬 내장 순정 XML 파서 사용 (링크 증발 버그 영구 해결)
             root = ET.fromstring(r.text)
             
             for item in root.findall('.//channel/item')[:15]:
@@ -119,6 +119,7 @@ def update_articles():
                 
                 if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
                 
+                # 이제 링크가 정상적으로 수집됩니다!
                 link = link_node.text.strip() if link_node is not None and link_node.text else ""
                 if not link or link in existing_links: continue
                 
@@ -167,10 +168,10 @@ def draw_box(col, header, data_list):
         st.markdown(f'<div class="section-bar"><span>{clean_header}</span><a href="#" style="color:#ccc; font-weight:normal; text-decoration:none; font-size:11px;">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         if not data_list:
-            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 수집 중입니다...</div>'
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">최초 데이터를 수집하고 있습니다. 잠시 후 새로고침 해주세요!</div>'
         for r in data_list[:8]:
             fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23eeeeee'/></svg>"
-            img_tag = f'<img src="{fallback}">' 
+            img_tag = f'<img src="{r.get("thumb", "")}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r.get("thumb") else f'<img src="{fallback}">'
             
             real_time_str = get_relative_time(r['timestamp'])
             
@@ -219,4 +220,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v48.0(Rollback to 44)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v44.0</div>', unsafe_allow_html=True)
