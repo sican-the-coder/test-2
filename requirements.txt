@@ -3,4 +3,4 @@ pandas
 requests
 beautifulsoup4
 plotly
-googletrans==3.1.0a0
+deep-translator
