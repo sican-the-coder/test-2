@@ -7,7 +7,7 @@ import os
 import urllib.parse
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-import xml.etree.ElementTree as ET  # 파이썬 순정 XML 파서 탑재!
+import xml.etree.ElementTree as ET
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -49,13 +49,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 글로벌 번역기
-def translate_title(text):
-    if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
-    if HAS_TRANSLATOR:
-        try: return "🌏 " + GoogleTranslator(source='auto', target='ko').translate(text)
-        except: pass
-    return "🌏 " + text
+# 3. 글로벌 번역기 및 국내 태극기 부착
+def format_title(title, is_global=False):
+    if is_global:
+        if HAS_TRANSLATOR and (not re.search('[가-힣]', title)):
+            try: return "🌏 " + GoogleTranslator(source='auto', target='ko').translate(title)
+            except: pass
+        return "🌏 " + title
+    else:
+        # 국내 기사는 태극기 아이콘 부착
+        return "🇰🇷 " + title
 
 # 4. 상대 시간 계산기
 def get_relative_time(timestamp):
@@ -66,8 +69,8 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 5. 로컬 누적 DB (빈칸 찌꺼기 초기화를 위해 v5로 변경)
-DB_FILE = "aagig_db_v5.json"
+# 5. 로컬 누적 DB (v6 업데이트)
+DB_FILE = "aagig_db_v6.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -79,34 +82,34 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 6. 클라우드 IP 차단 우회 엔진 (파이썬 순정 XML 파서 적용)
+# 6. 클라우드 IP 차단 우회 및 매체 다각화 수집기
 @st.cache_data(ttl=300)
 def update_articles():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     new_articles = []
 
+    # 검색 쿼리 다각화 (네이버 외 웹진/커뮤니티 직접 타겟팅)
     rss_feeds = [
-        ("게임", "네이버", "tag-biz", "domestic"),
-        ('게임 source:"지디넷코리아"', "지디넷", "tag-zd", "domestic"),
-        ('넥슨 source:"딜사이트"', "딜사이트", "tag-ds", "domestic"),
-        ('게임 source:"인벤"', "인벤", "tag-inven", "global"),
-        ('게임 source:"루리웹"', "루리웹", "tag-ruli", "global"),
-        ('"서정근" source:"머니투데이방송"', "MTN", "tag-mtn", "mtn_only"),
-        ("game site:ign.com", "IGN", "tag-global", "global")
+        ('게임 site:thisisgame.com', "TIG", "tag-biz", "domestic"),
+        ('게임 site:gamemeca.com', "게임메카", "tag-biz", "domestic"),
+        ('게임 site:inven.co.kr', "인벤", "tag-inven", "domestic"),
+        ('게임 site:ruliweb.com', "루리웹", "tag-ruli", "domestic"),
+        ('게임 site:zdnet.co.kr', "지디넷", "tag-zd", "domestic"),
+        ('게임 site:dealsite.co.kr', "딜사이트", "tag-ds", "domestic"),
+        ('게임 "서정근" site:mtn.co.kr', "MTN", "tag-mtn", "mtn_only"), # MTN 서정근 기자 타겟팅 강화
+        ('game site:ign.com', "IGN", "tag-global", "global"),
+        ('game site:gamespot.com', "GameSpot", "tag-global", "global")
     ]
 
     for query, source_name, tag, group in rss_feeds:
         try:
-            if group == "global" and source_name == "IGN":
+            url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
+            if group == "global":
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-US&gl=US&ceid=US:en"
-            else:
-                url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
             
-            r = requests.get(url, headers=headers, timeout=5)
-            
-            # [핵심 수정] 파이썬 내장 순정 XML 파서 사용 (링크 증발 버그 영구 해결)
+            r = requests.get(url, headers=headers, timeout=10)
             root = ET.fromstring(r.text)
             
             for item in root.findall('.//channel/item')[:15]:
@@ -114,35 +117,36 @@ def update_articles():
                 link_node = item.find('link')
                 pub_node = item.find('pubDate')
                 
-                raw_title = title_node.text.strip() if title_node is not None and title_node.text else ""
+                raw_title = title_node.text.strip() if title_node is not None else ""
                 clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
                 
-                if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
+                if len(clean_title) < 5: continue
                 
-                # 이제 링크가 정상적으로 수집됩니다!
-                link = link_node.text.strip() if link_node is not None and link_node.text else ""
+                link = link_node.text.strip() if link_node is not None else ""
                 if not link or link in existing_links: continue
                 
-                pubdate_str = pub_node.text if pub_node is not None and pub_node.text else ""
+                pubdate_str = pub_node.text if pub_node is not None else ""
                 try:
                     dt = parsedate_to_datetime(pubdate_str)
                     timestamp = dt.timestamp()
                 except:
                     timestamp = datetime.now().timestamp()
                 
+                # [보완 1] 수집 기간을 1일에서 7일(604800초)로 확장
                 if datetime.now().timestamp() - timestamp > 604800: continue
                 
-                final_title = translate_title(clean_title) if group == "global" else clean_title
+                # [보완 3] 태극기/지구본 아이콘 부착
+                final_title = format_title(clean_title, is_global=(group=="global"))
                 
                 new_articles.append({
                     "title": final_title, "link": link, "source": source_name, "tag": tag, 
                     "group": group, "thumb": "", "timestamp": timestamp
                 })
                 existing_links.add(link)
-        except Exception as e:
-            pass 
+        except: pass 
 
     combined_db = current_db + new_articles
+    # 7일이 지난 데이터는 DB에서 정리
     seven_days_ago = datetime.now().timestamp() - 604800
     valid_db = [item for item in combined_db if item['timestamp'] > seven_days_ago]
     valid_db = sorted(valid_db, key=lambda x: x['timestamp'], reverse=True)
@@ -168,11 +172,10 @@ def draw_box(col, header, data_list):
         st.markdown(f'<div class="section-bar"><span>{clean_header}</span><a href="#" style="color:#ccc; font-weight:normal; text-decoration:none; font-size:11px;">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         if not data_list:
-            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">최초 데이터를 수집하고 있습니다. 잠시 후 새로고침 해주세요!</div>'
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 수집하고 있습니다. 잠시 후 새로고침(F5) 해주세요!</div>'
         for r in data_list[:8]:
             fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23eeeeee'/></svg>"
-            img_tag = f'<img src="{r.get("thumb", "")}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r.get("thumb") else f'<img src="{fallback}">'
-            
+            img_tag = f'<img src="{fallback}">'
             real_time_str = get_relative_time(r['timestamp'])
             
             html += f"""
@@ -189,18 +192,17 @@ def draw_box(col, header, data_list):
         html += '</div>'
         st.markdown(html, unsafe_allow_html=True)
 
-# 6분할 레이아웃
 r1_c1, r1_c2 = st.columns(2)
-draw_box(r1_c1, "국내 주요 매체", dom)
-draw_box(r1_c2, "글로벌 & 커뮤니티 트렌드", glo)
+draw_box(r1_c1, "국내 주요 매체/웹진", dom)
+draw_box(r1_c2, "글로벌 트렌드", glo)
 
 r2_c1, r2_c2 = st.columns(2)
-draw_box(r2_c1, "국내 24시간 내 최고 이슈", dom[8:16] if len(dom) > 8 else dom)
-draw_box(r2_c2, "글로벌 24시간 내 최고 이슈", glo[8:16] if len(glo) > 8 else glo)
+draw_box(r2_c1, "국내 핫 이슈 (24H~7D)", dom[8:16] if len(dom) > 8 else dom)
+draw_box(r2_c2, "글로벌 핫 이슈 (24H~7D)", glo[8:16] if len(glo) > 8 else glo)
 
 r3_c1, r3_c2 = st.columns(2)
-draw_box(r3_c1, "1주일 내 최고 이슈", mixed[16:24] if len(mixed) > 16 else mixed)
-draw_box(r3_c2, "MTN 서정근", mtn)
+draw_box(r3_c1, "전체 최신 기사", mixed[16:24] if len(mixed) > 16 else mixed)
+draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
@@ -216,8 +218,8 @@ def draw_rank(col, header, data_list, color):
             html += f'<div class="list-row"><span class="rank-num {num_cls}">{num}</span><div class="content-area"><a href="{r["link"]}" target="_blank" class="title-text" style="white-space:nowrap !important; -webkit-line-clamp:1;">{r["title"]}</a></div></div>'
         html += '</div>'; st.markdown(html, unsafe_allow_html=True)
 
-draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed, "blue")
+draw_rank(b1, "최신 통합 뉴스", mixed[24:39] if len(mixed) > 24 else mixed, "blue")
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
-draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
+draw_rank(b3, "매체별 인사이트", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v44.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v45.0</div>', unsafe_allow_html=True)
