@@ -66,26 +66,33 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 5. 로컬 누적 DB (7일 보존을 위해 v6로 업데이트)
-DB_FILE = "aagig_db_v6.json"
+# 5. 로컬 누적 DB (강제 업데이트를 위해 데이터 정제 로직 포함)
+DB_FILE = "aagig_db_v7.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
         try:
-            with open(DB_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+            with open(DB_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # [강제 업데이트] 기존 데이터 중 KR 표기가 있으면 태극기로 즉시 치환
+                for item in data:
+                    if item['group'] != "global" and "KR" in item['title']:
+                        item['title'] = item['title'].replace("KR", "🇰🇷").strip()
+                return data
         except: pass
     return []
 
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 6. 클라우드 IP 차단 우회 엔진 (순정 파서 + 썸네일 추출 보강)
+# 6. 클라우드 IP 차단 우회 엔진 (수집 범위 확대 + 썸네일 정밀 스캔)
 @st.cache_data(ttl=300)
 def update_articles():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
     current_db = load_db()
-    existing_links = {item['link'] for item in current_db}
-    new_articles = []
+    # 링크를 키로 하는 딕셔너리로 변환 (업데이트 용이성)
+    db_dict = {item['link']: item for item in current_db}
+    new_count = 0
 
     rss_feeds = [
         ("게임", "네이버", "tag-biz", "domestic"),
@@ -94,12 +101,13 @@ def update_articles():
         ('게임 source:"인벤"', "인벤", "tag-inven", "global"),
         ('게임 source:"루리웹"', "루리웹", "tag-ruli", "global"),
         ('"서정근" source:"머니투데이방송"', "MTN", "tag-mtn", "mtn_only"),
-        ("game site:ign.com", "IGN", "tag-global", "global")
+        ("game site:ign.com", "IGN", "tag-global", "global"),
+        ("game site:gamespot.com", "GameSpot", "tag-global", "global") # 글로벌 추가 확보
     ]
 
     for query, source_name, tag, group in rss_feeds:
         try:
-            if group == "global" and source_name == "IGN":
+            if group == "global" and source_name != "루리웹" and source_name != "인벤":
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-US&gl=US&ceid=US:en"
             else:
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
@@ -107,7 +115,7 @@ def update_articles():
             r = requests.get(url, headers=headers, timeout=5)
             root = ET.fromstring(r.text)
             
-            for item in root.findall('.//channel/item')[:20]: # 수집 개수 상향
+            for item in root.findall('.//channel/item')[:30]: # 수집량 대폭 상향 (과거 데이터 확보)
                 title_node = item.find('title')
                 link_node = item.find('link')
                 pub_node = item.find('pubDate')
@@ -115,49 +123,54 @@ def update_articles():
                 
                 raw_title = title_node.text.strip() if title_node is not None and title_node.text else ""
                 clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
-                
                 if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
                 
                 link = link_node.text.strip() if link_node is not None and link_node.text else ""
-                if not link or link in existing_links: continue
+                if not link: continue
+                
+                # 썸네일 추출 (정밀 스캔)
+                thumb = ""
+                if desc_node is not None and desc_node.text:
+                    # 1순위: img 태그 검색
+                    img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_node.text)
+                    if img_match:
+                        thumb = img_match.group(1)
                 
                 # 시간 파싱
                 pubdate_str = pub_node.text if pub_node is not None and pub_node.text else ""
                 try:
                     dt = parsedate_to_datetime(pubdate_str)
                     timestamp = dt.timestamp()
-                except:
-                    timestamp = datetime.now().timestamp()
+                except: timestamp = datetime.now().timestamp()
                 
-                # [보강] 썸네일 추출 로직: description 태그 내의 img src 검색
-                thumb = ""
-                if desc_node is not None and desc_node.text:
-                    img_match = re.search(r'<img src="([^"]+)"', desc_node.text)
-                    if img_match:
-                        thumb = img_match.group(1)
+                # 7일 필터
+                if datetime.now().timestamp() - timestamp > 604800: continue
 
-                # 제목 앞 아이콘 처리 (KR -> 🇰🇷)
-                icon = "🇰🇷 " if group != "global" and "🌏" not in clean_title else ""
+                # 제목 아이콘 강제 적용
+                icon = "🇰🇷 " if group != "global" and "🇰🇷" not in clean_title and "🌏" not in clean_title else ""
                 final_title = translate_title(clean_title) if group == "global" else icon + clean_title
                 
-                new_articles.append({
-                    "title": final_title, "link": link, "source": source_name, "tag": tag, 
-                    "group": group, "thumb": thumb, "timestamp": timestamp
-                })
-                existing_links.add(link)
+                # [핵심] 이미 있는 기사라도 정보가 부족하면 업데이트
+                if link in db_dict:
+                    if not db_dict[link].get('thumb') and thumb:
+                        db_dict[link]['thumb'] = thumb
+                    if "KR" in db_dict[link]['title']:
+                        db_dict[link]['title'] = db_dict[link]['title'].replace("KR", "🇰🇷")
+                else:
+                    db_dict[link] = {
+                        "title": final_title, "link": link, "source": source_name, "tag": tag, 
+                        "group": group, "thumb": thumb, "timestamp": timestamp
+                    }
+                    new_count += 1
         except: pass 
 
-    # 데이터 병합 및 7일(604800초) 누적 필터링
-    combined_db = current_db + new_articles
+    # 7일치 필터링 및 정렬
     seven_days_ago = datetime.now().timestamp() - 604800
-    valid_db = [item for item in combined_db if item['timestamp'] > seven_days_ago]
+    final_list = [v for v in db_dict.values() if v['timestamp'] > seven_days_ago]
+    final_list = sorted(final_list, key=lambda x: x['timestamp'], reverse=True)
     
-    # 중복 제거 (혹시 모를 링크 중복 재필터)
-    unique_db = {item['link']: item for item in valid_db}.values()
-    final_db = sorted(unique_db, key=lambda x: x['timestamp'], reverse=True)
-    
-    save_db(final_db)
-    return final_db
+    save_db(final_list)
+    return final_list
 
 live_data = update_articles()
 
@@ -177,10 +190,10 @@ def draw_box(col, header, data_list):
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" style="color:#ccc; font-weight:normal; text-decoration:none; font-size:11px;">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         if not data_list:
-            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 누적하고 있습니다...</div>'
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 동기화 중입니다...</div>'
         for r in data_list[:8]:
-            # 썸네일 로직 적용
             fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23eeeeee'/></svg>"
+            # 구글 뉴스 이미지 딜레이/차단 대비 referrerpolicy 추가
             img_tag = f'<img src="{r.get("thumb", "")}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r.get("thumb") else f'<img src="{fallback}">'
             
             real_time_str = get_relative_time(r['timestamp'])
@@ -230,4 +243,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v45.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v46.0</div>', unsafe_allow_html=True)
