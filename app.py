@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import re
 import json
 import os
-from datetime import datetime
 import urllib.parse
+from datetime import datetime
 from email.utils import parsedate_to_datetime
+import xml.etree.ElementTree as ET  # 파이썬 순정 XML 파서 탑재!
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -66,8 +66,8 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 5. 로컬 누적 DB (백지상태였던 이전 DB 파일을 버리고 완전히 새 이름 부여)
-DB_FILE = "aagig_db_v4.json"
+# 5. 로컬 누적 DB (빈칸 찌꺼기 초기화를 위해 v5로 변경)
+DB_FILE = "aagig_db_v5.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -79,10 +79,10 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 6. 클라우드 IP 차단 우회 엔진 (에러 수정판)
+# 6. 클라우드 IP 차단 우회 엔진 (파이썬 순정 XML 파서 적용)
 @st.cache_data(ttl=300)
 def update_articles():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     new_articles = []
@@ -105,20 +105,25 @@ def update_articles():
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
             
             r = requests.get(url, headers=headers, timeout=5)
-            # [수정포인트 1] xml 대신 html.parser 사용 (서버 에러 방지)
-            soup = BeautifulSoup(r.text, 'html.parser') 
             
-            for item in soup.find_all('item')[:15]:
-                raw_title = item.find('title').text.strip()
+            # [핵심 수정] 파이썬 내장 순정 XML 파서 사용 (링크 증발 버그 영구 해결)
+            root = ET.fromstring(r.text)
+            
+            for item in root.findall('.//channel/item')[:15]:
+                title_node = item.find('title')
+                link_node = item.find('link')
+                pub_node = item.find('pubDate')
+                
+                raw_title = title_node.text.strip() if title_node is not None and title_node.text else ""
                 clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
                 
                 if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
                 
-                link = item.find('link').text.strip()
-                if link in existing_links: continue
+                # 이제 링크가 정상적으로 수집됩니다!
+                link = link_node.text.strip() if link_node is not None and link_node.text else ""
+                if not link or link in existing_links: continue
                 
-                # [수정포인트 2] html.parser는 태그를 소문자로 읽으므로 pubdate로 변경
-                pubdate_str = item.find('pubdate').text if item.find('pubdate') else ""
+                pubdate_str = pub_node.text if pub_node is not None and pub_node.text else ""
                 try:
                     dt = parsedate_to_datetime(pubdate_str)
                     timestamp = dt.timestamp()
@@ -163,7 +168,7 @@ def draw_box(col, header, data_list):
         st.markdown(f'<div class="section-bar"><span>{clean_header}</span><a href="#" style="color:#ccc; font-weight:normal; text-decoration:none; font-size:11px;">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         if not data_list:
-            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">최초 데이터를 수집하고 있습니다. 5초 뒤 새로고침 해주세요!</div>'
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">최초 데이터를 수집하고 있습니다. 잠시 후 새로고침 해주세요!</div>'
         for r in data_list[:8]:
             fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23eeeeee'/></svg>"
             img_tag = f'<img src="{r.get("thumb", "")}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r.get("thumb") else f'<img src="{fallback}">'
@@ -184,7 +189,7 @@ def draw_box(col, header, data_list):
         html += '</div>'
         st.markdown(html, unsafe_allow_html=True)
 
-# 6분할 레이아웃 적용
+# 6분할 레이아웃
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체", dom)
 draw_box(r1_c2, "글로벌 & 커뮤니티 트렌드", glo)
@@ -215,4 +220,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v43.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v44.0</div>', unsafe_allow_html=True)
