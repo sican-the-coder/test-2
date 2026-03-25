@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
 
 # 1. 페이지 설정
-st.set_page_config(page_title="AAGIG - Game Insight Ground v8.0", layout="wide")
+st.set_page_config(page_title="AAGIG - Game Insight Ground v9.0", layout="wide")
 
-# 2. 스타일 시트 (v7.0 디자인 + 텍스트 노출 방지 처리)
+# 2. 스타일 시트 (디자인 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -18,7 +16,7 @@ st.markdown("""
     .custom-box { background-color: white; border: 1px solid #ddd; border-top: none; margin-bottom: 18px; min-height: 280px; }
 
     .list-row { display: flex; padding: 8px 12px; border-bottom: 1px solid #f2f2f2; align-items: center; text-decoration: none !important; }
-    .thumb-box { width: 40px; height: 40px; background-color: #eee; margin-right: 12px; border-radius: 3px; flex-shrink: 0; overflow: hidden; }
+    .thumb-box { width: 38px; height: 38px; background-color: #eee; margin-right: 12px; border-radius: 3px; flex-shrink: 0; overflow: hidden; }
     .thumb-box img { width: 100%; height: 100%; object-fit: cover; }
 
     .content-area { flex-grow: 1; overflow: hidden; min-width: 0; text-align: left; }
@@ -35,10 +33,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 데이터 수집 엔진 (안정성 강화)
+# 3. 데이터 로직 (레이아웃 테스트용 샘플 유지)
 @st.cache_data(ttl=300)
 def fetch_data():
-    # 데이터가 없을 때를 대비한 빵빵한 샘플 (디자인 확인용)
     biz_samples = [
         {"title": "지디넷: 넥슨 '던파 모바일' 중국 사전 예약 5천만 돌파", "source": "지디넷", "tag": "tag-biz"},
         {"title": "MTN: 상반기 게임사 실적 전망... 신작 부재가 관건", "source": "MTN", "tag": "tag-biz"},
@@ -56,56 +53,41 @@ def fetch_data():
 biz_data, comm_data = fetch_data()
 
 # --- 화면 렌더링 ---
-st.markdown('<div class="main-logo-bar">AAGIG: Game Insight Ground v8.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-logo-bar">AAGIG: Game Insight Ground v9.0</div>', unsafe_allow_html=True)
 
-# 상단 4개 박스
+# 상단 4개 박스 (들여쓰기 완전 제거)
 c1, c2 = st.columns(2)
 
-def draw_section(header, data_list):
-    # HTML을 한 덩어리로 만들어서 한 번에 markdown으로 쏘기 (텍스트 유출 방지)
-    html = f'<div class="section-bar">{header}</div><div class="custom-box">'
-    for item in data_list[:8]:
-        html += f"""
-        <div class="list-row">
-            <div class="thumb-box"><img src="https://via.placeholder.com/40?text=G"></div>
-            <div class="content-area">
-                <span class="title-text">{item['title']}</span>
-                <span class="source-tag {item['tag']}">{item['source']}</span>
-                <span style="font-size:10px; color:#aaa;">👁️ 1,250 | 💬 12</span>
-            </div>
-        </div>
-        """
-    html += '</div>'
-    st.markdown(html, unsafe_allow_html=True)
+def draw_section(col, header, data_list):
+    with col:
+        html = f'<div class="section-bar">{header}</div><div class="custom-box">'
+        for item in data_list[:8]:
+            # 코드 노출 버그를 막기 위해 들여쓰기 없이 한 줄로 이어붙임
+            html += f'<div class="list-row"><div class="thumb-box"><img src="https://via.placeholder.com/40?text=G"></div><div class="content-area"><span class="title-text">{item["title"]}</span><span class="source-tag {item["tag"]}">{item["source"]}</span><span style="font-size:10px; color:#aaa;">👁️ 1,250 | 💬 12</span></div></div>'
+        html += '</div>'
+        st.markdown(html, unsafe_allow_html=True)
 
-with c1:
-    draw_section("📊 최신 이슈 모음", biz_data)
-    draw_section("🕘 9시간 내 핫이슈 모음", comm_data)
-
-with c2:
-    draw_section("🔥 3시간 내 핫이슈 모음", comm_data)
-    draw_section("❤️ 24시간 내 하트 가장 많이 받은 이슈", biz_data)
+draw_section(c1, "📊 최신 이슈 모음", biz_data)
+draw_section(c2, "🔥 3시간 내 핫이슈 모음", comm_data)
+draw_section(c1, "🕘 9시간 내 핫이슈 모음", comm_data)
+draw_section(c2, "❤️ 24시간 내 하트 가장 많이 받은 이슈", biz_data)
 
 # 중간 배너
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드 (AAGIG Mirroring)</div>', unsafe_allow_html=True)
 
-# 하단 3개 랭킹
+# 하단 3개 랭킹 (들여쓰기 완전 제거)
 b1, b2, b3 = st.columns(3)
 
-def draw_rank(header, data_list, color):
-    html = f'<div class="section-bar">{header}</div><div class="custom-box">'
-    for i, item in enumerate(data_list[:15]):
-        num = i + 1
-        num_cls = color if num <= 5 else ""
-        html += f"""
-        <div class="list-row">
-            <span class="rank-num {num_cls}">{num}</span>
-            <div class="content-area"><span class="title-text">{item['title']}</span></div>
-        </div>
-        """
-    html += '</div>'
-    st.markdown(html, unsafe_allow_html=True)
+def draw_rank(col, header, data_list, color):
+    with col:
+        html = f'<div class="section-bar">{header}</div><div class="custom-box">'
+        for i, item in enumerate(data_list[:15]):
+            num = i + 1
+            num_cls = color if num <= 5 else ""
+            html += f'<div class="list-row"><span class="rank-num {num_cls}">{num}</span><div class="content-area"><span class="title-text">{item["title"]}</span></div></div>'
+        html += '</div>'
+        st.markdown(html, unsafe_allow_html=True)
 
-with b1: draw_rank("커뮤니티 인기순", biz_data, "blue")
-with b2: draw_rank("많이 읽은 순서", comm_data, "red")
-with b3: draw_rank("커뮤니티 댓글순", biz_data, "green")
+draw_rank(b1, "커뮤니티 인기순", biz_data, "blue")
+draw_rank(b2, "많이 읽은 순서", comm_data, "red")
+draw_rank(b3, "커뮤니티 댓글순", biz_data, "green")
