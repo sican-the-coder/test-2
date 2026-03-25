@@ -49,7 +49,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 글로벌 번역기 (정상 작동)
+# 3. 글로벌 번역기
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
     if HAS_TRANSLATOR:
@@ -57,7 +57,7 @@ def translate_title(text):
         except: pass
     return "🌏 " + text
 
-# 4. 상대 시간 계산기 (RSS 표준시간 기준 오차 0%)
+# 4. 상대 시간 계산기
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
     if diff < 0: return "방금 전"
@@ -66,8 +66,8 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 5. 로컬 누적 DB (파일명을 변경하여 기존 'NAVER' 쓰레기 데이터 강제 초기화!!!)
-DB_FILE = "aagig_db_v3.json"
+# 5. 로컬 누적 DB (백지상태였던 이전 DB 파일을 버리고 완전히 새 이름 부여)
+DB_FILE = "aagig_db_v4.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -79,56 +79,52 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 6. 클라우드 IP 차단 우회 무적 크롤러 (구글 뉴스 source: 연산자 활용)
+# 6. 클라우드 IP 차단 우회 엔진 (에러 수정판)
 @st.cache_data(ttl=300)
 def update_articles():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     new_articles = []
 
-    # 구글 뉴스에서 'source:' 명령어로 언론사를 강제 지정하여 차단 우회 및 100% 수집
     rss_feeds = [
-        # (검색어, 표시할 매체명, 태그, 그룹)
-        ("게임", "네이버", "tag-biz", "domestic"), # 기본 게임 뉴스
+        ("게임", "네이버", "tag-biz", "domestic"),
         ('게임 source:"지디넷코리아"', "지디넷", "tag-zd", "domestic"),
         ('넥슨 source:"딜사이트"', "딜사이트", "tag-ds", "domestic"),
         ('게임 source:"인벤"', "인벤", "tag-inven", "global"),
         ('게임 source:"루리웹"', "루리웹", "tag-ruli", "global"),
-        ('"서정근" source:"머니투데이방송"', "MTN", "tag-mtn", "mtn_only"), # MTN 서정근 타겟팅 완벽
-        ("game site:ign.com", "IGN", "tag-global", "global") # 글로벌은 site 연산자 유지
+        ('"서정근" source:"머니투데이방송"', "MTN", "tag-mtn", "mtn_only"),
+        ("game site:ign.com", "IGN", "tag-global", "global")
     ]
 
     for query, source_name, tag, group in rss_feeds:
         try:
-            # 영어권(IGN)과 한국어권 분리
             if group == "global" and source_name == "IGN":
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-US&gl=US&ceid=US:en"
             else:
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
             
             r = requests.get(url, headers=headers, timeout=5)
-            soup = BeautifulSoup(r.text, 'xml') # RSS 전용 xml 파서 적용
+            # [수정포인트 1] xml 대신 html.parser 사용 (서버 에러 방지)
+            soup = BeautifulSoup(r.text, 'html.parser') 
             
             for item in soup.find_all('item')[:15]:
                 raw_title = item.find('title').text.strip()
-                
-                # 구글 뉴스의 꼬리표( - 매체명) 및 이전 오류였던 '- NAVER' 쓰레기값 완벽 제거
                 clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
-                if len(clean_title) < 5 or clean_title == "NAVER": continue
+                
+                if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
                 
                 link = item.find('link').text.strip()
                 if link in existing_links: continue
                 
-                # RSS 국제 표준 시간 파싱
-                pubdate_str = item.find('pubDate').text if item.find('pubDate') else ""
+                # [수정포인트 2] html.parser는 태그를 소문자로 읽으므로 pubdate로 변경
+                pubdate_str = item.find('pubdate').text if item.find('pubdate') else ""
                 try:
                     dt = parsedate_to_datetime(pubdate_str)
                     timestamp = dt.timestamp()
                 except:
                     timestamp = datetime.now().timestamp()
                 
-                # 7일(604800초) 지난 기사는 수집 거부
                 if datetime.now().timestamp() - timestamp > 604800: continue
                 
                 final_title = translate_title(clean_title) if group == "global" else clean_title
@@ -139,14 +135,11 @@ def update_articles():
                 })
                 existing_links.add(link)
         except Exception as e:
-            pass # 한 매체 에러 나도 전체 중단 안됨
+            pass 
 
-    # 데이터 병합 및 7일치 필터링
     combined_db = current_db + new_articles
     seven_days_ago = datetime.now().timestamp() - 604800
     valid_db = [item for item in combined_db if item['timestamp'] > seven_days_ago]
-    
-    # 시간순 정렬 (가장 최신 글이 위로)
     valid_db = sorted(valid_db, key=lambda x: x['timestamp'], reverse=True)
     
     save_db(valid_db)
@@ -154,13 +147,12 @@ def update_articles():
 
 live_data = update_articles()
 
-# 데이터 분배
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- 화면 렌더링 (UI 수정 0%) ---
+# --- 화면 렌더링 ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -171,7 +163,7 @@ def draw_box(col, header, data_list):
         st.markdown(f'<div class="section-bar"><span>{clean_header}</span><a href="#" style="color:#ccc; font-weight:normal; text-decoration:none; font-size:11px;">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         if not data_list:
-            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 새로 수집하고 있습니다. 5초 뒤 새로고침 해주세요!</div>'
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">최초 데이터를 수집하고 있습니다. 5초 뒤 새로고침 해주세요!</div>'
         for r in data_list[:8]:
             fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23eeeeee'/></svg>"
             img_tag = f'<img src="{r.get("thumb", "")}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r.get("thumb") else f'<img src="{fallback}">'
@@ -223,4 +215,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v42.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v43.0</div>', unsafe_allow_html=True)
