@@ -4,105 +4,140 @@ import requests
 from bs4 import BeautifulSoup
 import time
 
-# 1. 페이지 레이아웃 (AAGAG처럼 꽉 차게)
-st.set_page_config(page_title="AAGAG Game Insight", layout="wide")
+# 1. 페이지 설정 및 타이틀 (AAGIG 로고 스타일)
+st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. AAGAG 특유의 밀도 높은 디자인 (CSS)
+# 2. 모바일 대응 및 AAGIG UI 재현 CSS
 st.markdown("""
     <style>
-    .reportview-container .main .block-container { padding-top: 1rem; }
-    .aagag-list { font-family: 'Malgun Gothic', sans-serif; font-size: 12px; line-height: 1.4; }
-    .aagag-item { border-bottom: 1px solid #eee; padding: 3px 0; display: flex; justify-content: space-between; align-items: center; }
-    .rank { font-weight: bold; color: #888; width: 22px; display: inline-block; text-align: center; }
-    .community-tag { font-size: 10px; background: #f0f0f0; color: #666; padding: 1px 3px; border-radius: 2px; margin-right: 4px; }
-    .title-text { color: #333; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; display: inline-block; vertical-align: middle; }
-    .score-val { font-weight: bold; font-size: 11px; width: 40px; text-align: right; }
-    .header-bar { background: #55587c; color: white; padding: 6px 10px; font-weight: bold; font-size: 13px; margin-bottom: 3px; }
+    /* 전체 배경 및 기본 폰트 */
+    .stApp { background-color: #f2f2f2; }
+    
+    /* 헤더 스타일 */
+    .main-title { 
+        color: #55587c; font-size: 28px; font-weight: 800; text-align: center; 
+        margin-bottom: 20px; font-family: 'Arial Black', sans-serif;
+    }
+    
+    /* 섹션 헤더 */
+    .section-header { 
+        background-color: #55587c; color: white; padding: 8px 12px; 
+        font-weight: bold; font-size: 13px; display: flex; justify-content: space-between;
+        border-radius: 2px 2px 0 0;
+    }
+
+    /* 카드 박스 (모바일 대응을 위한 Flex/Grid) */
+    .card-container { 
+        background-color: white; border: 1px solid #ddd; margin-bottom: 15px; 
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .card-item { display: flex; padding: 8px; border-bottom: 1px solid #eee; }
+    .card-thumb { 
+        width: 45px; height: 45px; background-color: #eee; margin-right: 10px; 
+        border-radius: 3px; flex-shrink: 0; overflow: hidden; 
+    }
+    .card-content { flex-grow: 1; overflow: hidden; min-width: 0; }
+    .card-title { 
+        font-weight: bold; color: #333; font-size: 12px; 
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+    }
+    .card-meta { font-size: 10px; color: #888; margin-top: 3px; }
+
+    /* 하단 랭킹 리스트 스타일 */
+    .rank-item { display: flex; padding: 6px 10px; border-bottom: 1px solid #eee; font-size: 12px; align-items: center; }
+    .rank-num { font-weight: bold; width: 22px; text-align: center; margin-right: 8px; font-size: 13px; color: #888; }
+    .rank-title { flex-grow: 1; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rank-score { font-size: 10px; color: #aaa; width: 35px; text-align: right; }
+    
+    /* 뱃지 컬러 */
+    .blue-num { color: #3498db !important; }
+    .red-num { color: #e74c3c !important; }
+    .green-num { color: #27ae60 !important; }
+
+    /* 로그인 배너 (AAGAG 오마주) */
+    .login-banner { 
+        background-color: #55587c; color: #ffcccc; padding: 10px; 
+        text-align: center; font-size: 12px; font-weight: bold; margin: 15px 0; border-radius: 3px;
+    }
+
+    /* 모바일에서 여백 조정 */
+    @media (max-width: 768px) {
+        .main-title { font-size: 22px; }
+        .card-title { font-size: 13px; }
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# 3. 데이터 수집 엔진 (인벤 + 루리웹 + 샘플 통합)
-def get_all_community_data():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    all_data = []
+# 3. 가상 데이터 생성 (실제 크롤링 로직으로 교체 가능)
+def get_aagig_data():
+    data = []
+    # 최신이슈, 3h, 9h, 24h 구분을 위한 샘플 생성
+    for i in range(50):
+        data.append({
+            "title": f"[{['공지','핫','뉴스','제보'][i%4]}] 게임 사업부 일간 리포트 이슈 {i+1}번 게시글입니다.",
+            "comm": ["인벤", "디시", "공카", "루리웹"][i%4],
+            "views": 1000 + (i * 250),
+            "cmts": 10 + (i * 5),
+            "likes": 5 + (i * 3),
+            "time": i * 15 # 분 전
+        })
+    return pd.DataFrame(data)
 
-    # [수집 1] 인벤
-    try:
-        res = requests.get("https://www.inven.co.kr/board/powerbbs.php?come_idx=2097", headers=headers, timeout=3)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for row in soup.select('.sjnamelist tr')[1:11]:
-            title = row.select_one('.sj__title').get_text(strip=True)
-            all_data.append({"title": title, "comm": "인벤", "views": 1000, "cmts": 15, "sent": "긍정"})
-    except: pass
+df = get_aagig_data()
 
-    # [수집 2] 루리웹 (예시 구조)
-    try:
-        res = requests.get("https://bbs.ruliweb.com/news/board/1001", headers=headers, timeout=3)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for row in soup.select('.subject a')[:10]:
-            title = row.get_text(strip=True)
-            all_data.append({"title": title, "comm": "루리웹", "views": 2000, "cmts": 30, "sent": "중립"})
-    except: pass
+# --- 화면 구성 ---
+st.markdown('<div class="main-title">📊 AAGIG (Game Insight Ground)</div>', unsafe_allow_html=True)
 
-    # 만약 수집된게 없으면 시뮬레이션 데이터 추가 (AAGAG 구색 맞추기)
-    if len(all_data) < 5:
-        samples = [
-            {"title": "신규 캐릭터 밸런스 붕괴 논란", "comm": "디시", "views": 5000, "cmts": 120, "sent": "부정"},
-            {"title": "이번 패치 역대급 혜자네요", "comm": "공카", "views": 3200, "cmts": 45, "sent": "긍정"},
-            {"title": "서버 점검 연장 공지 실화냐", "comm": "인벤", "views": 8500, "cmts": 200, "sent": "부정"},
-            {"title": "무과금 1티어 조합 정리", "comm": "루리웹", "views": 4100, "cmts": 60, "sent": "긍정"},
-            {"title": "운영진 소통 방식에 불만 폭주", "comm": "디시", "views": 7000, "cmts": 180, "sent": "부정"}
-        ]
-        all_data.extend(samples)
+# 상단 4분할 섹션 (PC에선 2x2, 모바일에선 1x4 자동 전환)
+col1, col2 = st.columns([1, 1])
 
-    df = pd.DataFrame(all_data)
-    # 가중치 수식 적용
-    df['trend'] = (df['views'] * 0.01) + (df['cmts'] * 3)
-    df['risk'] = df.apply(lambda x: x['trend'] * 1.5 if x['sent'] == '부정' else x['trend'], axis=1)
-    return df
-
-# --- 메인 대시보드 ---
-st.title("📂 AAGAG Game Insight Board")
-
-# 사이드바 (필터 및 수동 입력)
-with st.sidebar:
-    st.header("🛠️ 관리 도구")
-    mode = st.radio("모드 선택", ["실시간 크롤링", "직접 데이터 입력"])
-    if st.button("🔄 새로고침"): st.cache_data.clear()
-
-if mode == "직접 데이터 입력":
-    raw_input = st.text_area("데이터 붙여넣기 (제목,커뮤니티,조회,댓글,감성)", "샘플이슈,인벤,1000,50,부정")
-    # (여기서 파싱 로직 추가 가능)
-    df = get_all_community_data()
-else:
-    df = get_all_community_data()
-
-# AAGAG 스타일 3열 레이아웃
-col1, col2, col3 = st.columns(3)
+def render_section(header, items):
+    st.markdown(f'<div class="section-header"><span>{header}</span><span style="font-size:10px;">더 보기</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    for _, r in items.head(6).iterrows():
+        st.markdown(f"""
+            <div class="card-item">
+                <div class="card-thumb"><img src="https://via.placeholder.com/45?text=G" style="width:100%;"></div>
+                <div class="card-content">
+                    <div class="card-title">{r['title']}</div>
+                    <div class="card-meta">0.2MB | 👁️ {r['views']} | 💬 {r['cmts']} | 🕓 {r['time']}분전</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 with col1:
-    st.markdown('<div class="header-bar">🚨 긴급 대응 (위험도순)</div>', unsafe_allow_html=True)
-    temp = df.sort_values('risk', ascending=False).head(20)
-    for i, r in enumerate(temp.to_dict('records')):
-        color = "#d32f2f" if r['sent'] == "부정" else "#666"
-        st.markdown(f'<div class="aagag-item"><span><span class="rank">{i+1}</span><span class="community-tag">{r["comm"]}</span><span class="title-text">{r["title"]}</span></span><span class="score-val" style="color:{color};">{int(r["risk"])}</span></div>', unsafe_allow_html=True)
+    render_section("최신 이슈 모음", df.sort_values('time'))
+    render_section("9 시간 내 핫이슈 모음", df[df['time'] <= 540].sort_values('views', ascending=False))
 
 with col2:
-    st.markdown('<div class="header-bar">🔥 화제성 랭킹 (조회/댓글순)</div>', unsafe_allow_html=True)
-    temp = df.sort_values('trend', ascending=False).head(20)
-    for i, r in enumerate(temp.to_dict('records')):
-        st.markdown(f'<div class="aagag-item"><span><span class="rank">{i+1}</span><span class="community-tag">{r["comm"]}</span><span class="title-text">{r["title"]}</span></span><span class="score-val" style="color:#1976d2;">{int(r["trend"])}</span></div>', unsafe_allow_html=True)
+    render_section("3 시간 내 핫이슈 모음", df[df['time'] <= 180].sort_values('views', ascending=False))
+    render_section("24 시간 내 하트 많이 받은 이슈", df.sort_values('likes', ascending=False))
 
-with col3:
-    st.markdown('<div class="header-bar">💬 커뮤니티 댓글순</div>', unsafe_allow_html=True)
-    temp = df.sort_values('cmts', ascending=False).head(20)
-    for i, r in enumerate(temp.to_dict('records')):
-        st.markdown(f'<div class="aagag-item"><span><span class="rank">{i+1}</span><span class="community-tag">{r["comm"]}</span><span class="title-text">{r["title"]}</span></span><span class="score-val" style="color:#666;">{r["cmts"]}</span></div>', unsafe_allow_html=True)
+# 중간 배너
+st.markdown('<div class="login-banner">로그인을 하시면 커뮤니티 리스트를 편집가능합니다. (AAGIG Mirroring)</div>', unsafe_allow_html=True)
 
-# 하단 노션 복사 기능
-st.markdown("---")
-if st.button("📝 Copy for Notion"):
-    notion_md = "### 🚨 긴급 대응 리스트\n| 순위 | 제목 | 위험도 |\n|---|---|---|\n"
-    for i, r in enumerate(df.sort_values('risk', ascending=False).head(5).to_dict('records')):
-        notion_md += f"| {i+1} | {r['title']} | {r['risk']} |\n"
-    st.code(notion_md)
+# 하단 3분할 랭킹 (PC 3열, 모바일 1열 자동 전환)
+b1, b2, b3 = st.columns([1, 1, 1])
+
+def render_rank(header, items, score_col, color_class):
+    st.markdown(f'<div class="section-header"><span>{header}</span><span style="font-size:10px;">더 보기</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    for i, r in enumerate(items.head(15).iterrows()):
+        num = i + 1
+        st.markdown(f"""
+            <div class="rank-item">
+                <span class="rank-num {color_class if num <= 5 else ''}">{num}</span>
+                <span class="rank-title">{r[1]['title']}</span>
+                <span class="rank-score">{r[1][score_col]}</span>
+            </div>
+        """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with b1: render_rank("커뮤니티별 인기순", df.sort_values('views', ascending=False), 'views', 'blue-num')
+with b2: render_rank("가장 많이 읽은 순서", df.sort_values('likes', ascending=False), 'likes', 'red-num')
+with b3: render_rank("커뮤니티별 댓글순", df.sort_values('cmts', ascending=False), 'cmts', 'green-num')
+
+# 하단 툴바
+st.divider()
+st.caption("AAGIG UI Clone for Game Insight | Developed by Sican-the-coder")
