@@ -7,13 +7,13 @@ import hashlib
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 세션 상태 초기화 (조회수/댓글수 DB 역할)
+# 2. 세션 상태 초기화 (조회수/댓글 카운팅용)
 if 'view_counts' not in st.session_state:
     st.session_state.view_counts = {}
 if 'comment_data' not in st.session_state:
     st.session_state.comment_data = {}
 
-# 3. 스타일 시트 (v12.0 디자인 + 링크 클릭 스타일 추가)
+# 3. 스타일 시트 (v14.0의 예쁜 디자인 완벽 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -48,12 +48,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 4. [기능 2] 게임 관련 글 필터링 함수
+# 4. 필터링 함수 (게임/IT 관련 기사만 색출)
 def is_game_related(title):
-    game_keywords = ['게임', '넥슨', '엔씨', '넷마블', '크래프톤', '펄어비스', '카카오게임즈', '출시', '업데이트', '신작', '스팀', '콘솔', 'e스포츠', '위메이드', '컴투스', '시프트업']
+    game_keywords = ['게임', '넥슨', '엔씨', '넷마블', '크래프톤', '펄어비스', '카카오게임즈', '출시', '업데이트', '신작', '스팀', '콘솔', 'e스포츠', '위메이드', '컴투스', '시프트업', '라인야후']
     return any(kw in title for kw in game_keywords)
 
-# 5. 데이터 수집 엔진
+# 5. 실시간 크롤러 엔진
 @st.cache_data(ttl=300)
 def fetch_filtered_data():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
@@ -65,11 +65,10 @@ def fetch_filtered_data():
         soup = BeautifulSoup(res.text, 'html.parser')
         articles = soup.select('.sa_item')
         
-        for art in articles[:60]: # 필터링을 위해 넉넉하게 탐색
+        for art in articles[:60]: 
             title_el = art.select_one('.sa_text_title, .sa_text_strong')
             if title_el:
                 title = title_el.get_text(strip=True)
-                # 게임 관련 키워드가 있고, 중복이 아닐 때만 수집
                 if title not in seen and is_game_related(title):
                     press_el = art.select_one('.sa_text_press')
                     img_el = art.select_one('.sa_thumb_inner img, .sa_thumb_link img')
@@ -78,17 +77,12 @@ def fetch_filtered_data():
                     source = press_el.get_text(strip=True) if press_el else "뉴스"
                     tag = "tag-biz" if any(x in source for x in ["지디넷", "MTN", "경제", "비즈", "파이낸셜"]) else "tag-inven"
                     
-                    # 고유 ID 생성 (URL 라우팅용)
                     post_id = hashlib.md5(title.encode()).hexdigest()[:8]
                     
-                    results.append({
-                        "id": post_id, "title": title, "source": source, 
-                        "tag": tag, "thumb": thumb
-                    })
+                    results.append({"id": post_id, "title": title, "source": source, "tag": tag, "thumb": thumb})
                     seen.add(title)
     except: pass
 
-    # 게임 기사가 부족할 경우 채워넣을 비상용 데이터
     if len(results) < 5:
         samples = [
             {"title": "넥슨 '던파 모바일' 중국 출시 가시화... 기대감 고조", "source": "지디넷", "tag": "tag-biz", "thumb": ""},
@@ -104,11 +98,11 @@ def fetch_filtered_data():
 
 data_list = fetch_filtered_data()
 
-# --- 라우팅 시스템 (Query Params) ---
+# --- 라우팅 시스템 ---
 params = st.query_params
 post_id = params.get("post_id")
 
-# [기능 3] 상세 페이지
+# [상세 페이지] 글 클릭 시 여기로 이동
 if post_id:
     post = next((item for item in data_list if item["id"] == post_id), None)
     
@@ -117,7 +111,7 @@ if post_id:
         st.rerun()
 
     if post:
-        # [기능 4] 조회수 1 증가
+        # 조회수 1 증가
         st.session_state.view_counts[post_id] = st.session_state.view_counts.get(post_id, 0) + 1
         current_views = st.session_state.view_counts[post_id]
         
@@ -130,10 +124,9 @@ if post_id:
             
         st.markdown("---")
         st.subheader("💡 본문 내용 (크롤링 데이터)")
-        st.info("실제 뉴스 사이트에서 긁어온 본문이 여기에 배치됩니다. 현재는 라우팅 테스트 모드입니다.")
+        st.info("실제 뉴스 사이트에서 긁어온 본문이 여기에 배치됩니다.")
         
         st.markdown("---")
-        # 댓글 시스템
         cmt_list = st.session_state.comment_data.get(post_id, [])
         st.subheader(f"💬 의견 남기기 (현재 {len(cmt_list)}개)")
         
@@ -153,7 +146,7 @@ if post_id:
     else:
         st.warning("해당 기사를 찾을 수 없거나 삭제되었습니다.")
 
-# 메인 페이지 (대시보드)
+# [메인 페이지] 평상시 보이는 화면
 else:
     try: st.image("division8_centered_1800x300.png", use_column_width=True)
     except: pass
@@ -163,11 +156,9 @@ else:
 
     def draw_box(col, header, data):
         with col:
-            # [기능 1] 더보기 버튼 (현재는 시각적 UI, 향후 URL 확장 가능)
             st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-link">더보기 ➔</a></div>', unsafe_allow_html=True)
             html = '<div class="custom-box">'
             for item in data[:8]:
-                # 조회수/댓글수 연동
                 v_count = st.session_state.view_counts.get(item['id'], 0)
                 c_count = len(st.session_state.comment_data.get(item['id'], []))
                 
@@ -175,21 +166,13 @@ else:
                 img_url = item["thumb"] if item["thumb"] else fallback_svg
                 img_tag = f'<img src="{img_url}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback_svg}\'">'
                 
-                # [핵심 변경점] st.button 대신 순수 HTML <a> 태그를 사용하여 레이아웃 보호 & 클릭 라우팅 구현
-                html += f"""
-                <div class="list-row">
-                    <div class="thumb-box">{img_tag}</div>
-                    <div class="content-area">
-                        <a href="?post_id={item['id']}" target="_self" class="title-link">{item['title']}</a>
-                        <span class="source-tag {item['tag']}">{item['source']}</span>
-                        <span style="font-size:10px; color:#aaa;">👁️ {v_count} | 💬 {c_count}</span>
-                    </div>
-                </div>
-                """
+                # [해결 핵심] 모든 들여쓰기를 없애고 완전히 한 줄의 문자열로 압축. 절대 깨지지 않음!
+                html += f'<div class="list-row"><div class="thumb-box">{img_tag}</div><div class="content-area"><a href="?post_id={item["id"]}" target="_self" class="title-link">{item["title"]}</a><span class="source-tag {item["tag"]}">{item["source"]}</span><span style="font-size:10px; color:#aaa;">👁️ {v_count} | 💬 {c_count}</span></div></div>'
+                
             html += '</div>'
             st.markdown(html, unsafe_allow_html=True)
 
     draw_box(c1, "📊 최신 게임 이슈", data_list)
     draw_box(c2, "🔥 실시간 화제성 (조회수 기준)", sorted(data_list, key=lambda x: st.session_state.view_counts.get(x['id'], 0), reverse=True))
 
-st.markdown('<div class="version-marker">v14.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v15.0</div>', unsafe_allow_html=True)
