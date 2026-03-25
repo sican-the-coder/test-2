@@ -1,168 +1,167 @@
 import streamlit as st
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 import time
 
-# 1. 페이지 설정 (레이아웃을 wide로 하되 CSS로 폭을 제한함)
+# 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. PC환경 중앙 정렬 및 가독성 커스텀 CSS
+# 2. 프리텐다드 폰트 적용 및 고도화된 스타일링
 st.markdown("""
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
+    
     <style>
-    /* 전체 배경색 */
+    /* 전체 배경 및 프리텐다드 폰트 강제 적용 */
+    body, .stApp, button, input, select, textarea {
+        font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif !important;
+    }
+
     .stApp { background-color: #f2f2f2; }
 
-    /* 메인 콘텐츠 폭 제한 및 중앙 정렬 (AAGAG 스타일) */
-    @media (min-width: 1000px) {
+    /* PC 중앙 정렬 및 폭 제한 */
+    @media (min-width: 1200px) {
         .block-container {
-            max-width: 1100px !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
+            max-width: 1200px !important;
+            padding-top: 1.5rem !important;
             margin: auto;
         }
     }
 
-    /* 최상단 타이틀 바 */
-    .aagag-header {
-        background-color: #3e4156;
-        padding: 10px 20px;
-        color: white;
-        display: flex;
-        align-items: center;
-        margin-bottom: 20px;
-        border-radius: 4px;
+    /* 섹션 타이틀 바 (AAGAG 오마주) */
+    .section-bar { 
+        background-color: #55587c; 
+        color: white; 
+        padding: 6px 12px; 
+        font-size: 13px; 
+        font-weight: 700; /* 프리텐다드 굵은 서체 활용 */
+        display: flex; 
+        justify-content: space-between; 
+        border-radius: 3px 3px 0 0; 
+        letter-spacing: -0.02em;
     }
-    .aagag-header h1 { font-size: 20px; margin: 0; font-weight: 800; color: #fff; }
 
-    /* 섹션 타이틀 바 */
-    .section-bar {
-        background-color: #55587c;
-        color: white;
-        padding: 5px 12px;
-        font-size: 13px;
-        font-weight: bold;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+    /* 리스트 컨테이너 */
+    .list-container { 
+        background-color: white; 
+        border: 1px solid #ddd; 
+        margin-bottom: 18px; 
+        border-top: none; 
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     }
-    .section-bar span.more { font-weight: normal; font-size: 11px; color: #ddd; cursor: pointer; }
 
-    /* 리스트 아이템 디자인 (밀도 높게) */
-    .list-container {
-        background-color: white;
-        border: 1px solid #ddd;
-        border-top: none;
-        margin-bottom: 15px;
+    /* 리스트 아이템 디자인 (가독성 강화) */
+    .list-item { 
+        display: flex; 
+        padding: 7px 12px; 
+        border-bottom: 1px solid #f0f0f0; 
+        font-size: 12.5px; 
+        align-items: center; 
+        transition: background 0.1s; 
     }
-    .list-item {
-        display: flex;
-        padding: 5px 10px;
-        border-bottom: 1px solid #eee;
-        font-size: 12px;
-        align-items: center;
-        transition: background 0.2s;
-    }
-    .list-item:hover { background-color: #f9f9f9; }
-    .thumbnail {
-        width: 36px; height: 36px; background-color: #eee;
-        margin-right: 10px; border-radius: 2px; flex-shrink: 0;
-    }
-    .content-area { flex-grow: 1; overflow: hidden; }
+    .list-item:hover { background-color: #f8f9fa; }
+
+    .tag-biz { background: #eef2ff; color: #4338ca; padding: 2px 5px; border-radius: 3px; font-size: 10px; margin-right: 8px; font-weight: 600; }
+    .tag-global { background: #fff1f2; color: #e11d48; padding: 2px 5px; border-radius: 3px; font-size: 10px; margin-right: 8px; font-weight: 600; }
+    
     .title-text { 
-        color: #333; font-weight: bold; font-size: 12px;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+        color: #333; 
+        font-weight: 600; 
+        white-space: nowrap; 
+        overflow: hidden; 
+        text-overflow: ellipsis; 
+        flex-grow: 1; 
+        letter-spacing: -0.03em; /* 프리텐다드 특유의 자간 조정 */
     }
-    .meta-text { font-size: 10px; color: #999; margin-top: 2px; }
 
-    /* 하단 랭킹 숫자 */
-    .rank-num { font-weight: bold; width: 20px; margin-right: 10px; font-size: 13px; color: #888; text-align: center; }
-    .rank-num.blue { color: #3498db; }
-    .rank-num.red { color: #e74c3c; }
-    .rank-num.green { color: #27ae60; }
+    .rank-num { font-weight: 800; width: 22px; color: #adb5bd; text-align: center; margin-right: 10px; font-size: 14px; }
+    .blue { color: #3b82f6 !important; } 
+    .red { color: #ef4444 !important; }
+    .green { color: #10b981 !important; }
 
-    /* 푸터 스타일 */
-    .footer-msg {
-        text-align: center; color: #ff8a8a; font-size: 12px; font-weight: bold;
-        padding: 10px; background: #55587c; border-radius: 4px; margin: 20px 0;
+    /* 메인 로고 바 */
+    .main-logo-bar {
+        background-color: #3e4156;
+        padding: 12px 20px;
+        color: white;
+        border-radius: 5px;
+        margin-bottom: 20px;
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.05em;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# 3. 데이터 로직 (예시 데이터)
-def get_mock_data():
-    items = []
-    for i in range(40):
-        items.append({
-            "title": f"[{['분석','정보','공략','뉴스'][i%4]}] 게임 사업부 핫트래킹 리포트 #{i+1} - 상세 정보",
-            "comm": ["인벤", "디시", "라운지", "루리웹"][i%4],
-            "views": 1500 + (i * 320),
-            "cmts": 12 + (i * 4),
-            "time": i * 12, # 분 전
-            "likes": 5 + (i * 2)
-        })
-    return pd.DataFrame(items)
+# 3. 데이터 로직 (생략/유지 - 이전과 동일)
+@st.cache_data(ttl=600)
+def fetch_all_integrated_data():
+    # 데이터 구조 시뮬레이션 (담당자님이 말씀하신 뉴스 사이트 + 글로벌 포함)
+    data = []
+    sources = [
+        ("지디넷", "비즈니스"), ("MTN", "비즈니스"), ("딜사이트", "비즈니스"),
+        ("IGN", "해외매체"), ("VGC", "해외매체"), ("Kotaku", "해외매체"),
+        ("인벤", "커뮤니티"), ("루리웹", "커뮤니티"), ("펨코", "커뮤니티")
+    ]
+    for name, cat in sources:
+        for i in range(5):
+            title = f"{name}의 실시간 주요 이슈 분석 #{i+1}"
+            if cat == "해외매체": title = f"🌏 [번역] {name} 글로벌 리포트: 주요 게임 시장 동향 {i+1}"
+            data.append({
+                "title": title, "source": name, "category": cat,
+                "views": 10000 - (i*1000), "likes": 500 - (i*50), "cmts": 100 - (i*10), "time": i*10
+            })
+    return pd.DataFrame(data)
 
-df = get_mock_data()
+df = fetch_all_integrated_data()
 
-# --- 화면 렌더링 시작 ---
+# --- 화면 렌더링 ---
 
-# 상단 헤더
-st.markdown('<div class="aagag-header"><h1>AAGIG: Game Insight Ground</h1></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-logo-bar">AAGIG: Game Insight Ground</div>', unsafe_allow_html=True)
 
-# 상단 4분할 격자 (PC 중앙 배치용)
+# 상단 그리드
 c1, c2 = st.columns(2)
 
-def draw_section(header, data):
-    st.markdown(f'<div class="section-bar"><span>{header}</span><span class="more">더 보기</span></div>', unsafe_allow_html=True)
+def draw_box(header, data, is_global=False):
+    tag_class = "tag-global" if is_global else "tag-biz"
+    st.markdown(f'<div class="section-bar"><span>{header}</span><span style="font-weight:400; font-size:11px;">더 보기</span></div>', unsafe_allow_html=True)
     st.markdown('<div class="list-container">', unsafe_allow_html=True)
-    for _, r in data.head(8).iterrows():
+    for _, r in data.head(7).iterrows():
         st.markdown(f"""
             <div class="list-item">
-                <div class="thumbnail"><img src="https://via.placeholder.com/36?text=G" style="width:100%;"></div>
-                <div class="content-area">
-                    <div class="title-text">{r['title']}</div>
-                    <div class="meta-text">0.1 MB | 👁️ {r['views']} | 💬 {r['cmts']} | {r['time']}분 전</div>
-                </div>
+                <span class="{tag_class}">{r['source']}</span>
+                <span class="title-text">{r['title']}</span>
+                <span style="font-size:10px; color:#999; margin-left:10px; min-width:40px;">{r['time']}m</span>
             </div>
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 with c1:
-    draw_section("최신 이슈 모음", df.sort_values('time'))
-    draw_section("9 시간 내 핫이슈 모음", df[df['time'] <= 540].sort_values('views', ascending=False))
+    draw_box("📈 비즈니스/IT (지디넷, MTN, 딜사이트)", df[df['category'] == '비즈니스'])
+    draw_box("🌐 글로벌 트렌드 (IGN, VGC 번역)", df[df['category'] == '해외매체'], is_global=True)
 
 with c2:
-    draw_section("3 시간 내 핫이슈 모음", df[df['time'] <= 180].sort_values('views', ascending=False))
-    draw_section("24 시간 내 하트 많이 받은 이슈", df.sort_values('likes', ascending=False))
+    draw_box("🔥 국내 커뮤니티 (인벤, 루리웹, 펨코)", df[df['category'] == '커뮤니티'])
+    draw_box("📊 하트 많이 받은 이슈 (24H)", df.sort_values('likes', ascending=False))
 
-# 중간 안내 메시지
-st.markdown('<div class="footer-msg">실시간 게임 이슈 Ground - AAGIG 배포 버전</div>', unsafe_allow_html=True)
-
-# 하단 3분할 랭킹
+# 하단 랭킹
+st.write("")
 b1, b2, b3 = st.columns(3)
 
-def draw_rank(header, data, score_col, color_class):
-    st.markdown(f'<div class="section-bar"><span>{header}</span><span class="more">더 보기</span></div>', unsafe_allow_html=True)
+def draw_ranking(header, data, score_col, color_class):
+    st.markdown(f'<div class="section-bar"><span>{header}</span></div>', unsafe_allow_html=True)
     st.markdown('<div class="list-container">', unsafe_allow_html=True)
-    for i, r in enumerate(data.head(15).iterrows()):
+    for i, r in enumerate(data.sort_values(score_col, ascending=False).head(15).iterrows()):
         num = i + 1
         st.markdown(f"""
             <div class="list-item">
-                <div class="rank-num {color_class if num <= 5 else ''}">{num}</div>
-                <div class="content-area">
-                    <div class="title-text">{r[1]['title']}</div>
-                </div>
-                <div style="font-size:11px; color:#999; width:40px; text-align:right;">{r[1][score_col]}</div>
+                <span class="rank-num {color_class if num <= 5 else ''}">{num}</span>
+                <span class="title-text">{r[1]['title']}</span>
+                <span style="font-size:10px; color:#aaa; min-width:30px; text-align:right;">{int(r[1][score_col])}</span>
             </div>
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-with b1: draw_rank("커뮤니티 인기 (3시간)", df.sort_values('views', ascending=False), 'views', 'blue')
-with b2: draw_rank("많이 읽은 순서 (3시간)", df.sort_values('likes', ascending=False), 'likes', 'red')
-with b3: draw_rank("댓글 순위 (3시간)", df.sort_values('cmts', ascending=False), 'cmts', 'green')
-
-# 노션 복사 버튼 (사이드바에 깔끔하게 배치)
-with st.sidebar:
-    st.title("AAGIG Control")
-    if st.button("📝 Copy for Notion"):
-        st.code(df.head(10)[['title', 'comm']].to_markdown())
-        st.success("클립보드에 복사하세요!")
+with b1: draw_ranking("종합 조회수 랭킹", df, 'views', 'blue')
+with b2: draw_ranking("시장 주목도 (Likes)", df, 'likes', 'red')
+with b3: draw_ranking("여론 활성도 (Comments)", df, 'cmts', 'green')
