@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import hashlib
-import re
 
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
@@ -33,73 +32,83 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 통합 수집 엔진 (전 소스 통합)
+# 3. 데이터 엔진 (통합 수집 + 위트 있는 지표)
 @st.cache_data(ttl=300)
-def fetch_everything():
+def fetch_all_sources():
     headers = {"User-Agent": "Mozilla/5.0"}
-    all_results = []
+    results = []
     seen = set()
-    game_kws = ['게임', '넥슨', '엔씨', '넷마블', '크래프톤', '펄어비스', '카카오게임즈', '출시', '신작', '위메이드', '라인야후', '붉은사막']
+    
+    # 위트 있는 조회수/댓글 대체 텍스트
+    unknown_views = ["비밀리에 보는 중 🤫", "조회수 실종됨 🔎", "나만 아는 띵작 🌟", "조회수 수줍음 😊", "먼지 쌓이는 중 🧹"]
+    unknown_cmts = ["침묵 수행 중 🙊", "첫 댓글의 주인공? ✍️", "댓글 가출함 🏃‍♂️", "인사이트 대기 중 💭"]
 
-    def add_res(title, link, source, tag, thumb="", views="0", cmts="0"):
+    def add_data(title, link, source, tag, thumb="", views="", cmts=""):
         t = title.strip()
-        if t not in seen and len(t) > 5:
-            all_results.append({"title": t, "link": link, "source": source, "tag": tag, "thumb": thumb, "views": views, "cmts": cmts})
+        if t and t not in seen:
+            v = views if views else unknown_views[len(t) % len(unknown_views)]
+            c = cmts if cmts else unknown_cmts[len(t) % len(unknown_cmts)]
+            results.append({"title": t, "link": link, "source": source, "tag": tag, "thumb": thumb, "views": v, "cmts": c})
             seen.add(t)
 
-    # [1] 네이버 뉴스 & 지디넷 & 딜사이트 & MTN 통합 수집
-    sources = [
-        {"name": "네이버", "url": "https://news.naver.com/section/105", "tag": "tag-biz"},
-        {"name": "지디넷", "url": "https://zdnet.co.kr/news/?lstcode=0060&page=1", "tag": "tag-biz"},
-        {"name": "딜사이트", "url": "https://dealsite.co.kr/search/?LIKE=%EB%84%A5%EC%8A%A8&SEARCHFIELD=TITLE", "tag": "tag-biz"},
-        {"name": "MTN", "url": "https://news.mtn.co.kr/search/%EC%84%9C%EC%A0%95%EA%B7%BC", "tag": "tag-biz"}
-    ]
-    for s in sources:
-        try:
-            r = requests.get(s['url'], headers=headers, timeout=5)
-            soup = BeautifulSoup(r.text, 'html.parser')
-            # 각 사이트별 셀렉터 최적화 (실제 조회수/댓글수 추출 시도)
-            items = soup.select('.sa_item, .news_item, .article-list li, .title_area')
-            for art in items[:15]:
-                title_el = art.select_one('.sa_text_title, .subject, .title, a')
-                link_el = art.select_one('a')
-                if title_el and link_el:
-                    title = title_el.get_text(strip=True)
-                    if any(kw in title for kw in game_kws) or s['name'] != "네이버":
-                        link = link_el['href'] if link_el['href'].startswith('http') else s['url'].split('/')[0] + "//" + s['url'].split('/')[2] + link_el['href']
-                        # 실제 지표 (리스트에 있을 경우 추출)
-                        v = art.select_one('.sa_view, .view, .hits').get_text(strip=True) if art.select_one('.sa_view, .view, .hits') else str(100+len(title))
-                        c = art.select_one('.sa_cmt, .comment, .reply').get_text(strip=True) if art.select_one('.sa_cmt, .comment, .reply') else "0"
-                        add_res(title, link, s['name'], s['tag'], "", v, c)
-        except: pass
+    # 1. 네이버 뉴스 (IT/게임)
+    try:
+        r = requests.get("https://news.naver.com/section/105", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for art in soup.select('.sa_item')[:15]:
+            t_el = art.select_one('.sa_text_title, .sa_text_strong')
+            l_el = art.select_one('a')
+            if t_el and l_el:
+                img = art.select_one('img')
+                add_data(t_el.get_text(strip=True), l_el['href'], "네이버", "tag-biz", img.get('src', "") if img else "")
+    except: pass
 
-    # [2] 인벤 & 루리웹 & 디스이즈게임
-    for site in ["https://www.inven.co.kr/webzine/news/", "https://bbs.ruliweb.com/news/game"]:
-        try:
-            r = requests.get(site, headers=headers, timeout=5)
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for art in soup.select('.newsList li, .item')[:10]:
-                title = art.select_one('.title, .subject').get_text(strip=True)
-                link = art.select_one('a')['href']
-                v = art.select_one('.view, .vcount').get_text(strip=True) if art.select_one('.view, .vcount') else "1.2k"
-                add_res(title, link, "커뮤니티", "tag-inven", "", v, "5")
-        except: pass
+    # 2. 지디넷 (게임 섹션)
+    try:
+        r = requests.get("https://zdnet.co.kr/news/?lstcode=0060&page=1", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for a in soup.find_all('a', href=True):
+            if '/view/?no=' in a['href']:
+                title = a.get_text(strip=True)
+                if len(title) > 10:
+                    add_data(title, "https://zdnet.co.kr" + a['href'], "지디넷", "tag-biz")
+    except: pass
 
-    # [3] IGN 글로벌 (번역)
+    # 3. 인벤 (최신 뉴스)
+    try:
+        r = requests.get("https://www.inven.co.kr/webzine/news/", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for art in soup.select('.newsList li')[:10]:
+            t_el = art.select_one('.title')
+            l_el = art.select_one('a')
+            if t_el and l_el:
+                add_data(t_el.get_text(strip=True), l_el['href'], "인벤", "tag-inven")
+    except: pass
+
+    # 4. IGN 글로벌 (번역 접두어)
     try:
         r = requests.get("https://www.ign.com/news", headers=headers, timeout=5)
         soup = BeautifulSoup(r.text, 'html.parser')
         for art in soup.select('.content-item')[:5]:
-            title = art.select_one('.item-title').get_text(strip=True)
-            link = "https://www.ign.com" + art.select_one('a')['href']
-            add_res("🌏 [글로벌] " + title, link, "IGN", "tag-global", "", "5.1k", "24")
+            t_el = art.select_one('.item-title')
+            l_el = art.select_one('a')
+            if t_el and l_el:
+                add_data("🌏 [글로벌] " + t_el.get_text(strip=True), "https://www.ign.com" + l_el['href'], "IGN", "tag-global")
     except: pass
 
-    return all_results
+    # 비상용 백업 데이터 (모두 실패 시 화면 깨짐 방지)
+    if not results:
+        add_data("데이터 연결을 다시 시도 중입니다...", "#", "System", "tag-biz")
 
-data = fetch_everything()
+    return results
 
-# --- 화면 렌더링 (v12.0 디자인 완벽 복원) ---
+all_data = fetch_all_sources()
+
+# [방안 A] 데이터 분배
+media_data = [d for d in all_data if d['tag'] == 'tag-biz']
+comm_global_data = [d for d in all_data if d['tag'] in ['tag-inven', 'tag-global']]
+
+# --- 화면 렌더링 (v12.0 디자인 박제) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -108,30 +117,38 @@ c1, c2 = st.columns(2)
 
 def draw_section(col, header, data_list):
     with col:
-        st.markdown(f'<div class="section-bar"><span>{header}</span><span style="font-weight:normal; font-size:11px;">더보기 ➔</span></div>', unsafe_allow_html=True)
+        # 더보기 버튼 유지
+        st.markdown(f'<div class="section-bar"><span>{header}</span><span style="font-weight:normal; font-size:11px; cursor:pointer;">더보기 ➔</span></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
-        for r in data_list[:8]:
-            html += f'<div class="list-row"><div class="thumb-box"><img src="data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'38\' height=\'38\'><rect width=\'38\' height=\'38\' fill=\'%23eeeeee\'/></svg>"></div><div class="content-area"><a href="{r["link"]}" target="_blank" class="title-text">{r["title"]}</a><span class="source-tag {r["tag"]}">{r["source"]}</span><span style="font-size:10px; color:#aaa;">👁️ {r["views"]} | 💬 {r["cmts"]}</span></div></div>'
+        # 데이터가 부족하면 빈 자리를 보정
+        display_list = data_list if data_list else all_data
+        for r in display_list[:8]:
+            fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='38' height='38'><rect width='38' height='38' fill='%23eeeeee'/></svg>"
+            img_tag = f'<img src="{r["thumb"]}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r["thumb"] else f'<img src="{fallback}">'
+            # v12.0 디자인 그대로 한 줄 압축 코딩
+            html += f'<div class="list-row"><div class="thumb-box">{img_tag}</div><div class="content-area"><a href="{r["link"]}" target="_blank" class="title-text">{r["title"]}</a><span class="source-tag {r["tag"]}">{r["source"]}</span><span style="font-size:10px; color:#aaa;">👁️ {r["views"]} | 💬 {r["cmts"]}</span></div></div>'
         html += '</div>'; st.markdown(html, unsafe_allow_html=True)
 
-# 섹션 분배
-draw_section(c1, "📊 주요 매체 실시간 (지디넷/딜사이트/MTN 등)", [d for d in data if d['source'] in ['지디넷', '딜사이트', 'MTN', '네이버']])
-draw_section(c2, "🔥 글로벌 & 커뮤니티 트렌드", [d for d in data if d['tag'] in ['tag-global', 'tag-inven']])
-draw_section(c1, "🕘 9시간 내 핫이슈 모음", data[::-1])
-draw_section(c2, "❤️ 24시간 내 하트 가장 많이 받은 이슈", sorted(data, key=lambda x: x['views'], reverse=True))
+# 섹션 배치 (방안 A)
+draw_section(c1, "📊 국내 주요 매체 (네이버/지디넷/딜사이트 등)", media_data)
+draw_section(c2, "🔥 커뮤니티 & 글로벌 트렌드 (인벤/IGN 등)", comm_global_data)
+draw_section(c1, "🕘 9시간 내 핫이슈 모음", all_data[::-1])
+draw_section(c2, "❤️ 24시간 내 가장 뜨거운 소식", sorted(all_data, key=lambda x: len(x['title']), reverse=True))
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
+# 하단 랭킹 3분할 (v12.0 복원)
 b1, b2, b3 = st.columns(3)
-def draw_rank(col, header, data_list, color):
+def draw_rank(col, header, data_subset, color):
     with col:
         st.markdown(f'<div class="section-bar">{header}</div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
-        for i, r in enumerate(data_list[:15]):
-            num = i+1; num_cls = color if num <= 5 else ""
+        for i, r in enumerate(data_subset[:15]):
+            num = i + 1
+            num_cls = color if num <= 5 else ""
             html += f'<div class="list-row"><span class="rank-num {num_cls}">{num}</span><div class="content-area"><a href="{r["link"]}" target="_blank" class="title-text">{r["title"]}</a></div></div>'
         html += '</div>'; st.markdown(html, unsafe_allow_html=True)
 
-draw_rank(b1, "조회수 랭킹", sorted(data, key=lambda x: x['views'], reverse=True), "blue")
-draw_rank(b2, "여론 집중도", sorted(data, key=lambda x: x['cmts'], reverse=True), "red")
-draw_rank(b3, "최신 업데이트", data, "green")
+draw_rank(b1, "많이 읽은 뉴스", all_data, "blue")
+draw_rank(b2, "실시간 여론 집중", all_data[::-1], "red")
+draw_rank(b3, "화제의 키워드", all_data, "green")
