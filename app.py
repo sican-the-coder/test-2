@@ -5,8 +5,8 @@ from bs4 import BeautifulSoup
 import re
 import json
 import os
-from datetime import datetime
-from email.utils import parsedate_to_datetime
+from datetime import datetime, timedelta
+import urllib.parse
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -18,7 +18,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (v12.0 디자인 영구 박제)
+# 2. 스타일 시트 (v12.0 디자인 영구 박제 - 절대 수정 안 함)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -48,7 +48,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 글로벌 번역기
+# 3. 글로벌 번역기 (정상 작동하던 로직 유지)
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
     if HAS_TRANSLATOR:
@@ -56,7 +56,32 @@ def translate_title(text):
         except: pass
     return "🌏 " + text
 
-# 4. 상대 시간 계산기 (RSS 표준시간 기준 완벽 계산)
+# 4. 하이브리드 시간 파싱 엔진
+def parse_time_to_ts(time_str):
+    now = datetime.now()
+    if not time_str: return now.timestamp()
+    ts = time_str.lower().strip()
+    
+    # "1시간 전" 같은 네이버 상대시간 처리
+    if "초 전" in ts: return (now - timedelta(seconds=int(re.sub(r'\D','',ts) or 0))).timestamp()
+    if "분 전" in ts: return (now - timedelta(minutes=int(re.sub(r'\D','',ts) or 0))).timestamp()
+    if "시간 전" in ts: return (now - timedelta(hours=int(re.sub(r'\D','',ts) or 0))).timestamp()
+    if "일 전" in ts: return (now - timedelta(days=int(re.sub(r'\D','',ts) or 0))).timestamp()
+    
+    # RSS 국제 표준 포맷 파싱 (IGN, 루리웹용)
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(ts).timestamp()
+    except: pass
+    
+    # 일반 날짜 (2026.03.25.) 처리
+    nums = re.findall(r'\d+', ts)
+    if len(nums) >= 3:
+        try: return datetime(int(nums[0]), int(nums[1]), int(nums[2])).timestamp()
+        except: pass
+        
+    return now.timestamp()
+
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
     if diff < 0: return "방금 전"
@@ -65,84 +90,93 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 5. 로컬 누적 DB (JSON 파일)
+# 5. 로컬 누적 DB (JSON 파일 유지)
 DB_FILE = "articles_db.json"
-
 def load_db():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r', encoding='utf-8') as f: return json.load(f)
         except: pass
     return []
-
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 6. 무적의 RSS 수집 엔진 (보안 100% 우회)
-@st.cache_data(ttl=300) # 5분마다 자동 갱신
+# 6. 하이브리드 수집 엔진
+@st.cache_data(ttl=300)
 def update_articles():
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     new_articles = []
 
-    # 각 매체별 구글 뉴스 RSS 피드 목록 (정확한 타겟팅)
-    rss_feeds = [
-        ("네이버", "tag-biz", "domestic", "https://news.google.com/rss/search?q=게임+site:n.news.naver.com&hl=ko&gl=KR&ceid=KR:ko"),
-        ("지디넷", "tag-zd", "domestic", "https://news.google.com/rss/search?q=게임+site:zdnet.co.kr&hl=ko&gl=KR&ceid=KR:ko"),
-        ("딜사이트", "tag-ds", "domestic", "https://news.google.com/rss/search?q=넥슨+site:dealsite.co.kr&hl=ko&gl=KR&ceid=KR:ko"),
-        ("인벤", "tag-inven", "global", "https://news.google.com/rss/search?q=게임+site:inven.co.kr&hl=ko&gl=KR&ceid=KR:ko"),
-        ("루리웹", "tag-ruli", "global", "https://news.google.com/rss/search?q=게임+site:bbs.ruliweb.com&hl=ko&gl=KR&ceid=KR:ko"),
-        ("IGN", "tag-global", "global", "https://news.google.com/rss/search?q=game+site:ign.com&hl=en-US&gl=US&ceid=US:en"),
-        ("MTN", "tag-mtn", "mtn_only", "https://news.google.com/rss/search?q=서정근+site:mtn.co.kr&hl=ko&gl=KR&ceid=KR:ko")
+    def add_item(title, link, source, tag, group, thumb, time_str):
+        title = title.strip()
+        if len(title) < 5 or link in existing_links: return
+        
+        # 구글 뉴스의 쓰레기 꼬리표 방어
+        title = re.sub(r' - [^-]+$', '', title).strip()
+        
+        timestamp = parse_time_to_ts(time_str)
+        if datetime.now().timestamp() - timestamp > 604800: return # 7일 필터
+        
+        final_title = translate_title(title) if group == "global" else title
+        new_articles.append({
+            "title": final_title, "link": link, "source": source, "tag": tag, 
+            "group": group, "thumb": thumb, "timestamp": timestamp
+        })
+        existing_links.add(link)
+
+    # --- [전략 1] 네이버 검색 우회 (국내 매체 철벽 수집) ---
+    naver_queries = [
+        ("게임", "네이버", "tag-biz", "domestic"),
+        ("게임 site:zdnet.co.kr", "지디넷", "tag-zd", "domestic"),
+        ("넥슨 site:dealsite.co.kr", "딜사이트", "tag-ds", "domestic"),
+        ('"서정근" 머니투데이방송', "MTN", "tag-mtn", "mtn_only") # MTN 서정근 타겟
     ]
-
-    for source, tag, group, url in rss_feeds:
+    for query, source, tag, group in naver_queries:
         try:
+            # sort=1 (최신순 정렬)
+            url = f"https://search.naver.com/search.naver?where=news&query={urllib.parse.quote(query)}&sort=1"
             r = requests.get(url, headers=headers, timeout=5)
-            soup = BeautifulSoup(r.text, 'html.parser') # RSS 파싱
-            
-            for item in soup.find_all('item')[:15]:
-                title = item.find('title').text.strip()
-                # 구글 뉴스가 붙이는 출처 꼬리표 " - 매체명" 제거
-                title = re.sub(r' - [^-]+$', '', title).strip()
-                
-                link = item.find('link').text
-                if link in existing_links or len(title) < 5: continue
-                
-                # 시간 파싱 (RSS 국제 표준 포맷)
-                pubdate_str = item.find('pubdate').text
-                try:
-                    dt = parsedate_to_datetime(pubdate_str)
-                    timestamp = dt.timestamp()
-                except:
-                    timestamp = datetime.now().timestamp()
-                
-                # 7일(604800초) 지난 기사는 버림
-                if datetime.now().timestamp() - timestamp > 604800: continue
-                
-                # 이미지 추출 시도 (RSS 본문 내)
-                thumb = ""
-                desc = item.find('description')
-                if desc:
-                    desc_soup = BeautifulSoup(desc.text, 'html.parser')
-                    img = desc_soup.find('img')
-                    if img and img.get('src'): thumb = img['src']
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for li in soup.select('.bx .news_area')[:10]:
+                tit_el = li.select_one('.news_tit')
+                if not tit_el: continue
+                info_els = li.select('.info_group .info')
+                time_str = info_els[-1].get_text(strip=True) if info_els else "1시간 전"
+                add_item(tit_el.get_text(), tit_el['href'], source, tag, group, "", time_str)
+        except: pass
 
-                final_title = translate_title(title) if group == "global" else title
-                
-                new_articles.append({
-                    "title": final_title, "link": link, "source": source, "tag": tag, 
-                    "group": group, "thumb": thumb, "timestamp": timestamp
-                })
-                existing_links.add(link)
-        except Exception as e:
-            pass # 한 매체가 에러 나도 다른 매체는 정상 수집되도록 패스
+    # --- [전략 2] 루리웹 자체 공식 RSS ---
+    try:
+        r = requests.get("https://bbs.ruliweb.com/news/rss", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser') # xml 대신 범용 파서 사용
+        for item in soup.find_all('item')[:10]:
+            add_item(item.find('title').text, item.find('link').text, "루리웹", "tag-ruli", "global", "", item.find('pubdate').text if item.find('pubdate') else "")
+    except: pass
 
-    # 기존 데이터 + 새 데이터 합치기
-    combined_db = current_db + new_articles
+    # --- [전략 3] IGN 글로벌 (기존 구글 RSS - 정상 작동분 유지) ---
+    try:
+        r = requests.get("https://news.google.com/rss/search?q=game+site:ign.com&hl=en-US&gl=US&ceid=US:en", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for item in soup.find_all('item')[:10]:
+            add_item(item.find('title').text, item.find('link').text, "IGN", "tag-global", "global", "", item.find('pubdate').text if item.find('pubdate') else "")
+    except: pass
     
-    # 7일치 필터링 및 시간순 정렬 (최신글이 맨 위로)
+    # --- [전략 4] 인벤 다이렉트 ---
+    try:
+        r = requests.get("https://www.inven.co.kr/webzine/news/", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for art in soup.select('.newsList li')[:10]:
+            t_el = art.select_one('.title')
+            if t_el:
+                time_el = art.select_one('.date')
+                img = art.select_one('.thumb img')
+                add_item(t_el.get_text(), art.select_one('a')['href'], "인벤", "tag-inven", "global", img.get('src') if img else "", time_el.get_text() if time_el else "")
+    except: pass
+
+    # 합치고 정렬 (최신순)
+    combined_db = current_db + new_articles
     seven_days_ago = datetime.now().timestamp() - 604800
     valid_db = [item for item in combined_db if item['timestamp'] > seven_days_ago]
     valid_db = sorted(valid_db, key=lambda x: x['timestamp'], reverse=True)
@@ -152,30 +186,28 @@ def update_articles():
 
 live_data = update_articles()
 
-# 6분할 데이터 그룹핑
+# 그룹핑
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- 화면 렌더링 ---
+# --- 화면 렌더링 (UI 로직 100% 동일 유지) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
 def draw_box(col, header, data_list):
     with col:
-        # 지시사항: 괄호 내용 삭제
         clean_header = header.split(' (')[0].strip()
         st.markdown(f'<div class="section-bar"><span>{clean_header}</span><a href="#" style="color:#ccc; font-weight:normal; text-decoration:none; font-size:11px;">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         if not data_list:
-            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 누적하고 있습니다...</div>'
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 수집 및 누적하고 있습니다...</div>'
         for r in data_list[:8]:
             fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23eeeeee'/></svg>"
             img_tag = f'<img src="{r["thumb"]}" referrerpolicy="no-referrer" onerror="this.src=\'{fallback}\'">' if r["thumb"] else f'<img src="{fallback}">'
             
-            # 실시간 시간 변환 출력
             real_time_str = get_relative_time(r['timestamp'])
             
             html += f"""
@@ -192,7 +224,7 @@ def draw_box(col, header, data_list):
         html += '</div>'
         st.markdown(html, unsafe_allow_html=True)
 
-# 6분할 레이아웃 적용
+# 6분할 레이아웃
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체", dom)
 draw_box(r1_c2, "글로벌 & 커뮤니티 트렌드", glo)
@@ -207,7 +239,7 @@ draw_box(r3_c2, "MTN 서정근", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
-# 하단 랭킹 (조회수 없으므로 타임스탬프와 길이 기반 혼합 정렬)
+# 하단 랭킹
 b1, b2, b3 = st.columns(3)
 def draw_rank(col, header, data_list, color):
     with col:
@@ -223,4 +255,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v40.0</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v41.0</div>', unsafe_allow_html=True)
