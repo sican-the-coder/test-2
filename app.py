@@ -48,6 +48,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- [UI 선출력] 배너와 타이틀을 먼저 그려서 백지화 방지 ---
+try: st.image("division8_centered_1800x300.png", use_column_width=True)
+except: pass
+st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
+
 # 3. 보조 로직
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
@@ -79,4 +84,149 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (네이버
+# 4. DB 및 수집 엔진
+DB_FILE = "aagig_db_v46.json"
+def load_db():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+        except: pass
+    return []
+def save_db(data):
+    with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+
+@st.cache_data(ttl=300)
+def update_articles():
+    current_db = load_db()
+    existing_links = {item['link'] for item in current_db}
+    existing_titles = [item['title'] for item in current_db]
+    new_articles = []
+
+    # --- [A구역: 매체별 수집 할당제 (Quota) 적용 유지] ---
+    feeds = [
+        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "thumbnail_fix", 20),
+        ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "mtn_keep", 15),
+        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", "thumbnail_fix", 3),
+        ("https://news.google.com/rss/search?q=넥슨+site:dealsite.co.kr&hl=ko&gl=KR&ceid=KR:ko", "딜사이트", "tag-biz", "domestic", "thumbnail_fix", 2),
+        ("https://news.google.com/rss/search?q=게임+site:fetv.co.kr&hl=ko&gl=KR&ceid=KR:ko", "FETV", "tag-biz", "domestic", "thumbnail_fix", 2),
+        ("https://www.thisisgame.com/rss/news", "TIG", "tag-kr", "domestic", "thumbnail_fix", 10),
+        ("https://www.gamemeca.com/rss/review.xml", "게임메카", "tag-kr", "domestic", "thumbnail_fix", 10),
+        ("https://www.gamemeca.com/rss/feature.xml", "게임메카", "tag-kr", "domestic", "thumbnail_fix", 10),
+        ("https://zdnet.co.kr/rss/news/?lstcode=0060", "ZDNet", "tag-kr", "domestic", "thumbnail_fix", 10),
+        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "thumbnail_fix", 10),
+        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-kr", "domestic", "thumbnail_fix", 10)
+    ]
+
+    blacklist = [
+        '[질문]', '[잡담]', '[단편]', '[연재]', '[소설]', '[팬픽]', '[유머]', '[스포]', '[뻘글]', 
+        '웹진 - 인벤', '뉴스웹툰', '아시안게임', '올림픽', '챔피언십', '스위밍',
+        '만화', '할인', '웹툰', '서적', '코믹스'
+    ]
+    whitelist_inven = ['[리뷰]', '[프리뷰]', '[인터뷰]', '[기획]', '[특집]', '[핸즈온]', '[신작]', '[정보]']
+    whitelist_ruliweb = ['[PC]', '[PS5]', '[PS4]', '[XSX]', '[XBOX]', '[닌텐도]', '[스위치]', '[모바일]']
+
+    for rss_url, source_name, tag, group, mode, cap in feeds:
+        try:
+            r = requests.get(rss_url, timeout=5)
+            root = ET.fromstring(r.text)
+            added_count = 0
+            
+            for item in root.findall('.//item'):
+                if added_count >= cap: 
+                    break
+                try:
+                    title = item.find('title').text.strip()
+                    link = item.find('link').text.strip()
+                    
+                    if any(b in title for b in blacklist): continue
+                    if source_name == "인벤" and not any(w in title for w in whitelist_inven): continue
+                    if source_name == "루리웹" and not any(w in title for w in whitelist_ruliweb): continue
+                    if link in existing_links: continue
+                    
+                    final_title = translate_title(title) if group == "global" else title
+                    if is_similar_title(final_title, existing_titles): continue
+                    
+                    thumb = ""
+                    if mode == "thumbnail_fix":
+                        media = item.find('{http://search.yahoo.com/mrss/}content')
+                        if media is not None: thumb = media.get('url')
+                        if not thumb:
+                            enc = item.find('enclosure')
+                            if enc is not None: thumb = enc.get('url')
+                        if not thumb:
+                            desc = item.find('description')
+                            if desc is not None:
+                                match = re.search(r'src="([^"]+)"', desc.text)
+                                if match: thumb = match.group(1)
+                    
+                    elif mode == "mtn_keep":
+                        desc = item.find('description')
+                        if desc is not None:
+                            match = re.search(r'src="([^"]+)"', desc.text)
+                            if match: thumb = match.group(1)
+
+                    if not thumb:
+                        thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
+
+                    pub_node = item.find('pubDate')
+                    timestamp = get_safe_timestamp(pub_node.text) if pub_node is not None else datetime.now().timestamp()
+                    
+                    new_articles.append({
+                        "title": final_title, "link": link, "source": source_name, "tag": tag, 
+                        "group": group, "thumb": thumb, "timestamp": timestamp
+                    })
+                    existing_links.add(link)
+                    existing_titles.append(final_title)
+                    added_count += 1
+                except: pass
+        except: pass
+
+    final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
+    save_db(final_db[:300])
+    return final_db
+
+# [데이터 수집 시 로딩 스피너 적용]
+with st.spinner('새로운 게임 산업 인사이트를 수집하고 있습니다. 잠시만 기다려주세요...'):
+    live_data = update_articles()
+
+dom = [d for d in live_data if d['group'] == "domestic"]
+glo = [d for d in live_data if d['group'] == "global"]
+mtn = [d for d in live_data if d['group'] == "mtn_only"]
+
+# --- 6분할 레이아웃 출력 ---
+def draw_box(col, header, data_list):
+    with col:
+        st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
+        html = '<div class="custom-box">'
+        for r in data_list[:8]:
+            fallback = f"https://www.google.com/s2/favicons?domain={r['source']}.com&sz=128"
+            thumb = r['thumb'] if r['thumb'] else fallback
+            region = "KR" if r['group'] != "global" else "GL"
+            reg_cls = "tag-kr" if r['group'] != "global" else "tag-gl"
+            html += f"""
+            <div class="list-row">
+                <div class="thumb-box"><img src="{thumb}" onerror="this.src='{fallback}'"></div>
+                <div class="content-area">
+                    <a href="{r['link']}" target="_blank" class="title-text">{r['title']}</a>
+                    <div class="meta-area">
+                        <span class="source-tag {r['tag']}">{r['source']}</span>
+                        <span class="source-tag {reg_cls}">{region}</span>
+                        <span>🕒 {get_relative_time(r['timestamp'])}</span>
+                    </div>
+                </div>
+            </div>"""
+        html += '</div>'; st.markdown(html, unsafe_allow_html=True)
+
+r1_c1, r1_c2 = st.columns(2)
+draw_box(r1_c1, "국내 주요 매체/웹진", dom)
+draw_box(r1_c2, "글로벌 트렌드", glo)
+
+r2_c1, r2_c2 = st.columns(2)
+draw_box(r2_c1, "국내 핫 이슈", dom[8:16])
+draw_box(r2_c2, "글로벌 핫 이슈", glo[8:16])
+
+r3_c1, r3_c2 = st.columns(2)
+draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
+draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
+
+st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
