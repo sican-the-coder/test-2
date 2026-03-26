@@ -9,7 +9,17 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
-import base64 # 구글 암호 해독을 위한 모듈 추가
+import base64
+from bs4 import BeautifulSoup
+
+# --- [신규 무기] 클라우드플레어 우회용 스크래퍼 ---
+try:
+    import cloudscraper
+    SCRAPER = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+    )
+except ImportError:
+    SCRAPER = requests # 설치 안됐을 경우 대비용 백업
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -56,7 +66,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 글로벌 번역기
+# 3. 글로벌 번역기 (유지)
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
     if HAS_TRANSLATOR:
@@ -64,14 +74,14 @@ def translate_title(text):
         except: pass
     return text
 
-# 4. 제목 유사도 판별기
+# 4. 제목 유사도 판별기 (유지)
 def is_similar_title(new_title, existing_titles, threshold=0.65):
     for ext_title in existing_titles:
         if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold:
             return True
     return False
 
-# 5. 상대 시간 계산기
+# 5. 상대 시간 계산기 (유지)
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
     if diff < 0: return "방금 전"
@@ -80,63 +90,38 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# --- [최종 수술 부위] URL 암호 해독 및 완벽한 사람 위장 엔진 ---
+# --- [핵심 수정부] 진짜 사람처럼 보안망을 뚫고 사진을 훔쳐오는 최종 결전 엔진 ---
 def get_og_image(url):
     real_url = url
-    
-    # 1단계: 구글 뉴스의 Base64 URL 껍데기를 파이썬으로 직접 벗겨냅니다 (서버 접속 없이 해독)
+    # 1단계: 구글 URL 암호 해독 (Base64 디코딩)
     try:
         if '/articles/' in url:
             encoded_part = url.split('/articles/')[1].split('?')[0]
-            # Base64 패딩 맞추기
             encoded_part += "=" * ((4 - len(encoded_part) % 4) % 4)
             decoded_bytes = base64.urlsafe_b64decode(encoded_part)
-            # 해독된 데이터 속에서 진짜 http:// 언론사 주소만 정규식으로 핀셋 추출
             match = re.search(b'(https?://[a-zA-Z0-9./_?&=-]+)', decoded_bytes)
-            if match:
-                real_url = match.group(1).decode('utf-8')
+            if match: real_url = match.group(1).decode('utf-8')
     except: pass
 
-    # 2단계: 언론사 봇 차단(403 Forbidden)을 뚫기 위한 강력한 '크롬 브라우저' 위장
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
-        "Referer": "https://news.google.com/"
-    }
-
+    # 2단계: cloudscraper를 이용해 보안망(Cloudflare 등)을 진짜 브라우저처럼 우회
     try:
-        # 암호 해독에 실패했을 경우를 대비한 기존 대기실 돌파 로직 병행
-        if real_url == url:
-            r1 = requests.get(url, headers=headers, timeout=2.5, allow_redirects=True)
-            refresh_match = re.search(r'url=([^"\']+)', r1.text, re.IGNORECASE)
-            if refresh_match:
-                real_url = refresh_match.group(1)
-            else:
-                a_match = re.search(r'<a\s+(?:[^>]*?\s+)?href="([^"]+)"', r1.text, re.IGNORECASE)
-                if a_match and "google.com" not in a_match.group(1):
-                    real_url = a_match.group(1)
+        # lxml 엔진으로 초고속 파싱
+        r = SCRAPER.get(real_url, timeout=3.5)
+        soup = BeautifulSoup(r.text, 'lxml')
         
-        real_url = real_url.replace('&amp;', '&')
-        
-        # 3단계: 알아낸 진짜 언론사 주소로 위장 접속하여 사진(og:image) 탈취
-        r2 = requests.get(real_url, headers=headers, timeout=3.0, allow_redirects=True)
-        html_text = r2.text
-        
-        match = re.search(r'<meta\s+(?:[^>]*\s+)?property="og:image"\s+content="([^"]+)"', html_text, re.IGNORECASE)
-        if not match:
-            match = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', html_text, re.IGNORECASE)
-            
-        if match:
-            img_url = match.group(1)
-            # 쓸모없는 구글 기본 로고나 투명 이미지는 확실히 버림
-            if "googleusercontent" in img_url or "news.google.com" in img_url or "favicon" in img_url or "blank" in img_url:
+        # og:image 메타 태그 검색
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            img_url = og_img["content"]
+            # 가짜 이미지 필터링
+            if "googleusercontent" in img_url or "favicon" in img_url or "blank" in img_url:
                 return ""
             return img_url
     except: pass
     return ""
 
-# 6. 로컬 누적 DB (v18로 명명하여 캐시 완벽 갱신)
-DB_FILE = "aagig_db_v18.json"
+# 6. 로컬 누적 DB (v19로 갱신)
+DB_FILE = "aagig_db_v19.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -148,10 +133,9 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 7. 클라우드 방화벽 우회 수집 엔진 (기존 밸런스 100% 유지)
+# 7. 수집 엔진 (기존 밸런스 100% 유지)
 @st.cache_data(ttl=300)
 def update_articles():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     existing_titles = [item['title'] for item in current_db] 
@@ -175,20 +159,19 @@ def update_articles():
             else:
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
             
-            r = requests.get(url, headers=headers, timeout=5)
+            r = requests.get(url, timeout=5)
             root = ET.fromstring(r.text)
             
-            for item in root.findall('.//channel/item')[:15]:
+            for item in root.findall('.//channel/item')[:12]: # 개수 살짝 조절하여 속도 확보
                 try: 
-                    raw_title = item.find('title').text.strip() if item.find('title') is not None else ""
-                    
+                    raw_title = item.find('title').text.strip()
                     clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
                     clean_title = re.sub(r'\[?(KR|GL)\]?\s*[:-]?\s*', '', clean_title, flags=re.IGNORECASE).strip()
                     
                     if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
                     
-                    link = item.find('link').text.strip() if item.find('link') is not None else ""
-                    if not link or link in existing_links: continue
+                    link = item.find('link').text.strip()
+                    if link in existing_links: continue
                     
                     pub_node = item.find('pubDate')
                     try:
@@ -203,14 +186,8 @@ def update_articles():
                     if group == "domestic" and is_similar_title(final_title, existing_titles):
                         continue
                     
-                    desc_node = item.find('description')
-                    thumb = ""
-                    if desc_node is not None and desc_node.text:
-                        img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_node.text)
-                        if img_match: thumb = img_match.group(1)
-                    
-                    if not thumb:
-                        thumb = get_og_image(link)
+                    # 진짜 사진 훔쳐오기 (cloudscraper 가동)
+                    thumb = get_og_image(link)
 
                     new_articles.append({
                         "title": final_title, "link": link, "source": source_name, "tag": tag, 
@@ -232,13 +209,12 @@ def update_articles():
     return final_db
 
 live_data = update_articles()
-
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- 화면 렌더링 ---
+# --- 화면 렌더링 (기존 레이아웃 100% 유지) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -251,12 +227,9 @@ def draw_box(col, header, data_list):
         if not data_list:
             html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 동기화 중입니다... 5초 뒤 새로고침 해주세요.</div>'
         for r in data_list[:8]:
-            
             fallback_svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23e2e8f0'/><path d='M14 16h16M14 22h16M14 28h8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/></svg>"
             thumb_src = r.get("thumb") if r.get("thumb") else fallback_svg
-            
             real_time_str = get_relative_time(r['timestamp'])
-            
             region_tag = "KR" if r['group'] != "global" else "GL"
             region_class = "tag-kr" if r['group'] != "global" else "tag-gl"
             
@@ -275,7 +248,6 @@ def draw_box(col, header, data_list):
         html += '</div>'
         st.markdown(html, unsafe_allow_html=True)
 
-# 6분할 레이아웃
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체/웹진", dom)
 draw_box(r1_c2, "글로벌 트렌드", glo)
@@ -290,7 +262,6 @@ draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
-# 하단 랭킹
 b1, b2, b3 = st.columns(3)
 def draw_rank(col, header, data_list, color):
     with col:
@@ -306,4 +277,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v56.0 (Base64 Decode & Anti-Bot Spoofing)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v57.0 (Final: Cloudscraper Security Bypass)</div>', unsafe_allow_html=True)
