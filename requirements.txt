@@ -5,5 +5,3 @@ beautifulsoup4
 plotly
 deep-translator
 cloudscraper
-playwright
-lxml
