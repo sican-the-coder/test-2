@@ -79,8 +79,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (스팸 캐시 폭파를 위해 v43으로 이름 변경!)
-DB_FILE = "aagig_db_v43.json"
+# 4. DB 및 수집 엔진 (쓰레기 데이터 완전 소멸을 위해 v44 사용!)
+DB_FILE = "aagig_db_v44.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -97,40 +97,59 @@ def update_articles():
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
 
-    # --- [도배 원천 차단: 기존 루리웹/인벤 전체 RSS 영구 삭제 및 정예 타겟팅만 이식] ---
+    # --- [A구역: 공식 RSS 원복 + 14개 정예 링크 타겟팅] ---
     feeds = [
-        # 글로벌 & MTN & 네이버 (동결)
+        # 동결 구역
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "thumbnail_fix"),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "mtn_keep"),
         ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", "thumbnail_fix"),
         
-        # 국내 정예 (TIG, 메카, ZDNet 공식)
+        # 공식 정예 RSS (썸네일 보존)
         ("https://www.thisisgame.com/rss/news", "TIG", "tag-kr", "domestic", "thumbnail_fix"),
         ("https://www.gamemeca.com/rss/review.xml", "게임메카", "tag-kr", "domestic", "thumbnail_fix"),
         ("https://www.gamemeca.com/rss/feature.xml", "게임메카", "tag-kr", "domestic", "thumbnail_fix"),
         ("https://zdnet.co.kr/rss/news/?lstcode=0060", "ZDNet", "tag-kr", "domestic", "thumbnail_fix"),
+        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "thumbnail_fix"),
+        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-kr", "domestic", "thumbnail_fix"),
         
-        # 국내 정예 (우회 타겟팅: 딜사이트, FETV, 인벤-리뷰/기획, 루리웹-정보)
+        # 특정 검색어 필수 매체 (구글 뉴스 기반 + 블랙리스트 적용)
         ("https://news.google.com/rss/search?q=넥슨+site:dealsite.co.kr&hl=ko&gl=KR&ceid=KR:ko", "딜사이트", "tag-biz", "domestic", "thumbnail_fix"),
-        ("https://news.google.com/rss/search?q=게임+site:fetv.co.kr&hl=ko&gl=KR&ceid=KR:ko", "FETV", "tag-biz", "domestic", "thumbnail_fix"),
-        ("https://news.google.com/rss/search?q=리뷰+OR+기획+site:inven.co.kr/webzine&hl=ko&gl=KR&ceid=KR:ko", "인벤", "tag-inven", "domestic", "thumbnail_fix"),
-        ("https://news.google.com/rss/search?q=PC+OR+콘솔+OR+정보+site:bbs.ruliweb.com/news&hl=ko&gl=KR&ceid=KR:ko", "루리웹", "tag-kr", "domestic", "thumbnail_fix")
+        ("https://news.google.com/rss/search?q=게임+site:fetv.co.kr&hl=ko&gl=KR&ceid=KR:ko", "FETV", "tag-biz", "domestic", "thumbnail_fix")
     ]
+
+    # [초강력 이중 필터링 시스템]
+    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '[소설]', '[팬픽]', '[유머]', '[스포]', '[뻘글]', '웹진 - 인벤', '뉴스웹툰', '아시안게임', '올림픽', '챔피언십', '스위밍']
+    whitelist_inven = ['[리뷰]', '[프리뷰]', '[인터뷰]', '[기획]', '[특집]', '[핸즈온]', '[신작]', '[정보]']
+    whitelist_ruliweb = ['[PC]', '[PS5]', '[PS4]', '[XSX]', '[XBOX]', '[닌텐도]', '[스위치]', '[모바일]', '[정보]']
 
     for rss_url, source_name, tag, group, mode in feeds:
         try:
             r = requests.get(rss_url, timeout=5)
             root = ET.fromstring(r.text)
-            for item in root.findall('.//item')[:15]:
+            for item in root.findall('.//item')[:20]:  # 필터링 대비 넉넉히 수집
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
+                    
+                    # 1. 블랙리스트 무조건 차단
+                    if any(b in title for b in blacklist):
+                        continue
+                        
+                    # 2. 인벤 화이트리스트 핀셋 추출 (리뷰/기획/정보 등만 통과)
+                    if source_name == "인벤" and not any(w in title for w in whitelist_inven):
+                        continue
+                        
+                    # 3. 루리웹 화이트리스트 핀셋 추출 (PC/콘솔 머리말만 통과)
+                    if source_name == "루리웹" and not any(w in title for w in whitelist_ruliweb):
+                        continue
+
                     if link in existing_links: continue
                     
                     final_title = translate_title(title) if group == "global" else title
                     if is_similar_title(final_title, existing_titles): continue
                     
                     thumb = ""
+                    # 썸네일 수술 (v80.0 로직 100% 유지)
                     if mode == "thumbnail_fix":
                         media = item.find('{http://search.yahoo.com/mrss/}content')
                         if media is not None: thumb = media.get('url')
@@ -168,12 +187,13 @@ def update_articles():
     save_db(final_db[:300])
     return final_db
 
+# [철칙 준수: 누락 없는 4줄 완벽 복구]
 live_data = update_articles()
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 
-# --- [철칙 3: B 보존] 디자인 100% 동일 유지 ---
+# --- [철칙 3: B 보존] 디자인 및 렌더링 호출부 ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -214,3 +234,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v101.0 (Strict Whitelist & Clean Cache Active)</div>', unsafe_allow_html=True)
