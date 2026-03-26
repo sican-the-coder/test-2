@@ -62,15 +62,14 @@ def is_similar_title(new_title, existing_titles, threshold=0.65):
             return True
     return False
 
-# --- [철칙 4: 반복 실수 차단] 날짜 물리적 고정 유지 ---
+# 날짜 교정 유지 (v78.0 성과)
 def get_safe_timestamp(pub_date_str):
     now = datetime.now().timestamp()
     try:
         ts = parsedate_to_datetime(pub_date_str).timestamp()
-        if abs(now - ts) > 31536000: return now # 1년 이상 오류 데이터 강제 현재화
+        if abs(now - ts) > 31536000: return now
         return ts
-    except:
-        return now
+    except: return now
 
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
@@ -81,8 +80,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v41 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v41.json"
+# 4. DB 및 수집 엔진 (v42 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v42.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -99,12 +98,13 @@ def update_articles():
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
 
+    # --- [철칙: MTN 건들지 마라] 기존 로직 유지 및 국내 썸네일 수술 ---
     feeds = [
-        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "direct"),
-        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic", "direct"),
-        ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "google_cache"),
-        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", "google_cache"),
-        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "direct")
+        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "thumbnail_fix"),
+        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic", "thumbnail_fix"),
+        ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "mtn_keep"),
+        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", "thumbnail_fix"),
+        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "thumbnail_fix")
     ]
 
     for rss_url, source_name, tag, group, mode in feeds:
@@ -121,15 +121,25 @@ def update_articles():
                     if is_similar_title(final_title, existing_titles): continue
                     
                     thumb = ""
-                    desc_node = item.find('description')
-                    desc_text = desc_node.text if desc_node is not None else ""
-                    
-                    # [A-사진 추출]
-                    match = re.search(r'src="([^"]+)"', desc_text)
-                    if match: thumb = match.group(1)
-                    if not thumb:
+                    # [A-국내 썸네일 핀셋 수술] 글로벌 성공 로직 전면 이식
+                    if mode == "thumbnail_fix":
                         media = item.find('{http://search.yahoo.com/mrss/}content')
                         if media is not None: thumb = media.get('url')
+                        if not thumb:
+                            enc = item.find('enclosure')
+                            if enc is not None: thumb = enc.get('url')
+                        if not thumb:
+                            desc = item.find('description')
+                            if desc is not None:
+                                match = re.search(r'src="([^"]+)"', desc.text)
+                                if match: thumb = match.group(1)
+                    
+                    # [MTN 동결] 기존 로직 보존
+                    elif mode == "mtn_keep":
+                        desc = item.find('description')
+                        if desc is not None:
+                            match = re.search(r'src="([^"]+)"', desc.text)
+                            if match: thumb = match.group(1)
 
                     if not thumb:
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
@@ -146,22 +156,7 @@ def update_articles():
                 except: pass
         except: pass
 
-    # --- [A-데이터 정제] 매체 믹싱 로직 ---
-    final_raw = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
-    
-    # 믹싱 처리: 같은 소스가 너무 연속되지 않게 섞음
-    mixed_list = []
-    source_counts = {}
-    for item in final_raw:
-        s = item['source']
-        if source_counts.get(s, 0) < 3: # 한 소스당 상위 3개씩만 우선 배치
-            mixed_list.append(item)
-            source_counts[s] = source_counts.get(s, 0) + 1
-    
-    # 나머지 데이터 채우기
-    remaining = [x for x in final_raw if x not in mixed_list]
-    final_db = mixed_list + remaining
-    
+    final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
     save_db(final_db[:300])
     return final_db
 
@@ -169,9 +164,8 @@ live_data = update_articles()
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
-mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- [철칙 3: B 보존] 화면 렌더링 (디자인 고정) ---
+# --- [철칙 3: B 보존] 디자인 100% 동일 유지 ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -180,10 +174,7 @@ def draw_box(col, header, data_list):
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
-        # [A-정렬 최적화] 사진 있는 기사를 리스트 상단으로 우선 끌어올림
-        sorted_list = sorted(data_list[:12], key=lambda x: ("data:image" in x['thumb'] or "http" in x['thumb']) and "favicon" not in x['thumb'], reverse=True)
-        
-        for r in sorted_list[:8]:
+        for r in data_list[:8]:
             fallback = f"https://www.google.com/s2/favicons?domain={r['source']}.com&sz=128"
             thumb = r['thumb'] if r['thumb'] else fallback
             region = "KR" if r['group'] != "global" else "GL"
@@ -207,12 +198,12 @@ draw_box(r1_c1, "국내 주요 매체/웹진", dom)
 draw_box(r1_c2, "글로벌 트렌드", glo)
 
 r2_c1, r2_c2 = st.columns(2)
-draw_box(r2_c1, "국내 핫 이슈", dom[8:20])
-draw_box(r2_c2, "글로벌 핫 이슈", glo[8:20])
+draw_box(r2_c1, "국내 핫 이슈", dom[8:16])
+draw_box(r2_c2, "글로벌 핫 이슈", glo[8:16])
 
 r3_c1, r3_c2 = st.columns(2)
-draw_box(r3_c1, "전체 최신 기사", mixed[16:32])
+draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v79.0 (Source Mixing & Photo Priority & Layout Locked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v80.0 (MTN Keep & Domestic Thumbnail Fix)</div>', unsafe_allow_html=True)
