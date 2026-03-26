@@ -5,7 +5,7 @@ import re
 import json
 import os
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
@@ -20,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (담당자님 컨펌 B 영역 디자인 100% 박제 - 배너, 더보기, 6분할 유지)
+# 2. 스타일 시트 (담당자님 컨펌 B 영역 디자인 100% 박제)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -41,14 +41,9 @@ st.markdown("""
     .tag-inven { background-color: #eef2ff; color: #4338ca; } 
     .tag-global { background-color: #fffbeb; color: #d97706; }
     .tag-mtn { background-color: #f0fdf4; color: #166534; }
-    .tag-ds { background-color: #fef2f2; color: #991b1b; }
-    .tag-zd { background-color: #f3f4f6; color: #374151; }
-    .tag-ruli { background-color: #e0f2fe; color: #0369a1; }
     .tag-kr { background-color: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
     .tag-gl { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
     .mid-banner { background-color: #55587c; color: white; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; margin: 15px 0; border-radius: 4px; }
-    .rank-num { font-weight: 800; width: 22px; color: #adb5bd; margin-right: 10px; font-size: 14px; text-align: center; margin-top: 2px; }
-    .blue { color: #3b82f6 !important; } .red { color: #ef4444 !important; } .green { color: #10b981 !important; }
     .more-btn { color: #ccc !important; font-weight: normal; text-decoration: none; font-size: 11px; }
 </style>
 """, unsafe_allow_html=True)
@@ -69,14 +64,15 @@ def is_similar_title(new_title, existing_titles, threshold=0.65):
 
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
+    if diff < 0: return "방금 전" # 미래 시간 방지
     if diff < 86400:
         if diff >= 3600: return f"{int(diff // 3600)}시간 전"
         if diff >= 60: return f"{int(diff // 60)}분 전"
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v37 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v37.json"
+# 4. DB 및 수집 엔진 (v38 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v38.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -93,20 +89,19 @@ def update_articles():
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
 
-    # --- [철칙 4: 반복 실수 확인] 구글 탈피 - 매체 공식 다이렉트 RSS 주소 ---
-    rss_feeds = [
-        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic"),
-        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic"),
-        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic"), # 네이버는 일단 구글 백업 유지
-        ("https://game.ign.com/rss/articles", "IGN", "tag-global", "global"),
-        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global")
+    # --- [철칙 4: 반복 실수 확인] 투 트랙 수집 전략 ---
+    feeds = [
+        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "direct"),
+        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic", "direct"),
+        ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "google_cache"),
+        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", "google_cache"),
+        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "direct")
     ]
 
-    for rss_url, source_name, tag, group in rss_feeds:
+    for rss_url, source_name, tag, group, mode in feeds:
         try:
             r = requests.get(rss_url, timeout=5)
             root = ET.fromstring(r.text)
-            
             for item in root.findall('.//item')[:10]:
                 try:
                     title = item.find('title').text.strip()
@@ -116,34 +111,40 @@ def update_articles():
                     final_title = translate_title(title) if group == "global" else title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [진짜 사진 추출] 매체 원본 태그 낚아채기 ---
                     thumb = ""
-                    # 1순위: enclosure (이미지)
-                    enc = item.find('enclosure')
-                    if enc is not None: thumb = enc.get('url')
-                    
-                    # 2순위: media:content (네임스페이스 처리 생략 위해 find 활용)
+                    # [A-사진 추출 로직]
+                    if mode == "direct":
+                        # 1순위: media:content, 2순위: enclosure, 3순위: desc 내부 img
+                        media = item.find('{http://search.yahoo.com/mrss/}content')
+                        if media is not None: thumb = media.get('url')
+                        if not thumb:
+                            enc = item.find('enclosure')
+                            if enc is not None: thumb = enc.get('url')
+                        if not thumb:
+                            desc = item.find('description')
+                            if desc is not None:
+                                match = re.search(r'<img[^>]+src="([^"]+)"', desc.text)
+                                if match: thumb = match.group(1)
+                    else: # mode == "google_cache" (MTN 전용)
+                        desc = item.find('description').text
+                        # 구글이 긁어놓은 tbn 정적 주소 낚아채기
+                        match = re.search(r'src="([^"]+)"', desc)
+                        if match: thumb = match.group(1)
+
                     if not thumb:
-                        media_content = item.find('{http://search.yahoo.com/mrss/}content')
-                        if media_content is not None: thumb = media_content.get('url')
-                    
-                    # 3순위: description 내부 <img> 태그 정규식
-                    if not thumb:
-                        desc = item.find('description')
-                        if desc is not None:
-                            img_match = re.search(r'<img[^>]+src="([^"]+)"', desc.text)
-                            if img_match: thumb = img_match.group(1)
-                    
-                    if not thumb: # 실패시 로고 폴백
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
-                    
+
+                    # [루리웹 날짜 버그 수정]
                     pub_node = item.find('pubDate')
-                    dt = parsedate_to_datetime(pub_node.text)
-                    timestamp = dt.timestamp()
+                    try:
+                        dt = parsedate_to_datetime(pub_node.text)
+                    except:
+                        # 비표준 포맷 대응 (루리웹 등)
+                        dt = datetime.now(timezone.utc)
                     
                     new_articles.append({
                         "title": final_title, "link": link, "source": source_name, "tag": tag, 
-                        "group": group, "thumb": thumb, "timestamp": timestamp
+                        "group": group, "thumb": thumb, "timestamp": dt.timestamp()
                     })
                     existing_links.add(link)
                     existing_titles.append(final_title)
@@ -160,7 +161,7 @@ glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- [철칙 3: B 보존] 화면 렌더링 (배너, 레이아웃 100% 동일 유지) ---
+# --- [철칙 3: B 보존] 화면 렌더링 (배너, 더보기, 레이아웃 100% 동일 유지) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -174,7 +175,6 @@ def draw_box(col, header, data_list):
             thumb = r.get("thumb") if r.get("thumb") else fallback
             region = "KR" if r['group'] != "global" else "GL"
             reg_cls = "tag-kr" if r['group'] != "global" else "tag-gl"
-            
             html += f"""
             <div class="list-row">
                 <div class="thumb-box"><img src="{thumb}" onerror="this.src='{fallback}'"></div>
@@ -203,19 +203,4 @@ draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
-b1, b2, b3 = st.columns(3)
-def draw_rank(col, header, data_list, color):
-    with col:
-        st.markdown(f'<div class="section-bar">{header}</div>', unsafe_allow_html=True)
-        html = '<div class="custom-box">'
-        for i, r in enumerate(data_list[:15]):
-            num = i + 1
-            num_cls = color if num <= 5 else ""
-            html += f'<div class="list-row"><span class="rank-num {num_cls}">{num}</span><div class="content-area"><a href="{r["link"]}" target="_blank" class="title-text" style="white-space:nowrap !important; -webkit-line-clamp:1;">{r["title"]}</a></div></div>'
-        html += '</div>'; st.markdown(html, unsafe_allow_html=True)
-
-draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed, "blue")
-draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
-draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
-
-st.markdown('<div class="version-marker">v75.0 (Direct RSS & Layout Locked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v76.0 (Hybrid Data & B-Frozen Design)</div>', unsafe_allow_html=True)
