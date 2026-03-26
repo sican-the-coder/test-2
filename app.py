@@ -5,7 +5,6 @@ import re
 import json
 import os
 import urllib.parse
-import base64
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
@@ -21,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (담당자님이 컨펌하신 B 영역 디자인 100% 박제 - 배너, 더보기, 폰트 포함)
+# 2. 스타일 시트 (담당자님 컨펌 B 영역 디자인 100% 박제 - 배너, 더보기, 6분할 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -76,20 +75,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# --- [철칙 4: 신규 방식] 서버 메모리 직송(Base64) 엔진 ---
-def get_image_as_base64(url):
-    if not url: return None
-    try:
-        # 서버가 보안망을 직접 통과하여 이미지를 낚아챔
-        res = requests.get(url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
-        if res.status_code == 200:
-            encoded = base64.b64encode(res.content).decode()
-            return f"data:image/jpeg;base64,{encoded}"
-    except: pass
-    return None
-
-# 4. DB 및 수집 엔진 (v36 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v36.json"
+# 4. DB 및 수집 엔진 (v37 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v37.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -106,44 +93,48 @@ def update_articles():
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
 
+    # --- [철칙 4: 반복 실수 확인] 구글 탈피 - 매체 공식 다이렉트 RSS 주소 ---
     rss_feeds = [
-        ("게임", "네이버", "tag-biz", "domestic"),
-        ("게임 site:zdnet.co.kr", "지디넷", "tag-zd", "domestic"),
-        ("게임 site:dealsite.co.kr", "딜사이트", "tag-ds", "domestic"),
-        ("게임 site:inven.co.kr", "인벤", "tag-inven", "domestic"), 
-        ("게임 site:ruliweb.com", "루리웹", "tag-ruli", "domestic"),
-        ("서정근 게임 site:mtn.co.kr", "MTN", "tag-mtn", "mtn_only"),
-        ("game site:ign.com", "IGN", "tag-global", "global"),
-        ("game site:gamespot.com", "GameSpot", "tag-global", "global")
+        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic"),
+        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic"),
+        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic"), # 네이버는 일단 구글 백업 유지
+        ("https://game.ign.com/rss/articles", "IGN", "tag-global", "global"),
+        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global")
     ]
 
-    for query, source_name, tag, group in rss_feeds:
+    for rss_url, source_name, tag, group in rss_feeds:
         try:
-            url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl={'en-US' if group=='global' else 'ko'}&gl={'US' if group=='global' else 'KR'}&ceid={'US:en' if group=='global' else 'KR:ko'}"
-            r = requests.get(url, timeout=5)
+            r = requests.get(rss_url, timeout=5)
             root = ET.fromstring(r.text)
             
-            for item in root.findall('.//channel/item')[:12]:
+            for item in root.findall('.//item')[:10]:
                 try:
-                    raw_title = item.find('title').text.strip()
-                    clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
-                    clean_title = re.sub(r'\[?(KR|GL)\]?\s*[:-]?\s*', '', clean_title, flags=re.IGNORECASE).strip()
-                    
+                    title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
                     if link in existing_links: continue
                     
-                    final_title = translate_title(clean_title) if group == "global" else clean_title
+                    final_title = translate_title(title) if group == "global" else title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [신규 공법 적용] 주소가 아닌 데이터 자체를 수집 ---
-                    thumb = None
-                    desc_text = item.find('description').text
-                    img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
-                    if img_match:
-                        # 서버 메모리에 저장 후 Base64 전송
-                        thumb = get_image_as_base64(img_match.group(1))
+                    # --- [진짜 사진 추출] 매체 원본 태그 낚아채기 ---
+                    thumb = ""
+                    # 1순위: enclosure (이미지)
+                    enc = item.find('enclosure')
+                    if enc is not None: thumb = enc.get('url')
                     
-                    if not thumb: # 실패시 정규화된 매체 로고
+                    # 2순위: media:content (네임스페이스 처리 생략 위해 find 활용)
+                    if not thumb:
+                        media_content = item.find('{http://search.yahoo.com/mrss/}content')
+                        if media_content is not None: thumb = media_content.get('url')
+                    
+                    # 3순위: description 내부 <img> 태그 정규식
+                    if not thumb:
+                        desc = item.find('description')
+                        if desc is not None:
+                            img_match = re.search(r'<img[^>]+src="([^"]+)"', desc.text)
+                            if img_match: thumb = img_match.group(1)
+                    
+                    if not thumb: # 실패시 로고 폴백
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
                     pub_node = item.find('pubDate')
@@ -169,7 +160,7 @@ glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- [철칙 3: B 보존] 화면 렌더링 (배너, 더보기, 레이아웃 100% 동일 유지) ---
+# --- [철칙 3: B 보존] 화면 렌더링 (배너, 레이아웃 100% 동일 유지) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -227,4 +218,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v74.0 (A-Binary Injection & B-Frozen Layout)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v75.0 (Direct RSS & Layout Locked)</div>', unsafe_allow_html=True)
