@@ -29,7 +29,7 @@ st.markdown("""
     .sub-logo-header { text-align: center; color: #3e4156; font-size: 20px; font-weight: 700; margin-top: 5px; margin-bottom: 25px; letter-spacing: -0.04em; }
     .section-bar { background-color: #55587c; color: white; padding: 6px 12px; font-size: 13px; font-weight: 700; border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center; }
     .custom-box { background-color: white; border: 1px solid #ddd; border-top: none; margin-bottom: 18px; min-height: 280px; }
-    .list-row { display: flex; padding: 8px 12박; border-bottom: 1px solid #f2f2f2; align-items: flex-start; text-decoration: none !important; }
+    .list-row { display: flex; padding: 8px 12px; border-bottom: 1px solid #f2f2f2; align-items: flex-start; text-decoration: none !important; }
     .thumb-box { width: 44px; height: 44px; margin-right: 12px; border-radius: 4px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-top: 2px; }
     .thumb-box img { width: 100%; height: 100%; object-fit: cover; }
     .content-area { flex-grow: 1; overflow: hidden; min-width: 0; text-align: left; }
@@ -75,8 +75,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v31 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v31.json"
+# 4. DB 및 수집 엔진 (v32 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v32.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -122,15 +122,16 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [철칙 2: A-사진 복구] 구글 RSS 원본 썸네일 다이렉트 추출 ---
+                    # --- [철칙 2: A-사진 복구] 이미지 프록시 우회 렌더링 엔진 ---
                     thumb = ""
-                    # RSS description 내부에서 구글이 인코딩해둔 <img> 주소 직접 탈취
                     desc_text = item.find('description').text
                     img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
                     if img_match:
-                        thumb = img_match.group(1)
+                        raw_thumb = img_match.group(1)
+                        # 이미지 프록시(wsrv.nl)를 사용하여 구글 차단 우회
+                        thumb = f"https://wsrv.nl/?url={urllib.parse.quote(raw_thumb)}&w=200&h=200&fit=cover"
                     
-                    if not thumb: # 실패시 고해상도 매체 로고 폴백
+                    if not thumb: # 실패시 매체 로고 폴백
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
                     pub_node = item.find('pubDate')
@@ -157,13 +158,12 @@ mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
 # --- [철칙 3: B 보존] 화면 렌더링 (배너, 더보기, 레이아웃 100% 동일 유지) ---
-try: st.image("division8_centered_1800x300.png", use_column_width=True) # 배너
+try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
 def draw_box(col, header, data_list):
     with col:
-        # 더보기 버튼 (디자인 고정)
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         for r in data_list[:8]:
@@ -186,7 +186,6 @@ def draw_box(col, header, data_list):
             </div>"""
         html += '</div>'; st.markdown(html, unsafe_allow_html=True)
 
-# 2단 6분할 레이아웃 유지
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체/웹진", dom)
 draw_box(r1_c2, "글로벌 트렌드", glo)
@@ -201,7 +200,6 @@ draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
-# 하단 3단 랭킹 구조 유지
 b1, b2, b3 = st.columns(3)
 def draw_rank(col, header, data_list, color):
     with col:
@@ -217,4 +215,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v69.0 (A-RSS Direct Fetch & B-Frozen Layout)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v70.0 (A-Proxy Image Unblocker & B-Layout Locked)</div>', unsafe_allow_html=True)
