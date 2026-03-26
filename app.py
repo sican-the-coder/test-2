@@ -20,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (담당자님 컨펌 B 영역 디자인 100% 박제)
+# 2. 스타일 시트 (B 영역 디자인 100% 동결)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -48,7 +48,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- [UI 선출력] 배너와 타이틀을 먼저 그려서 백지화 방지 ---
+# --- [UI 선출력] 배너와 타이틀을 먼저 그려서 백지화 방지 (유지) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -84,8 +84,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진
-DB_FILE = "aagig_db_v46.json"
+# 4. DB 및 수집 엔진 (과거 망령 제거용 v47)
+DB_FILE = "aagig_db_v47.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -101,8 +101,13 @@ def update_articles():
     existing_links = {item['link'] for item in current_db}
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
+    
+    # 봇 차단 우회용 헤더
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
 
-    # --- [A구역: 매체별 수집 할당제 (Quota) 적용 유지] ---
+    # 매체별 수집 할당제 (비율 동결)
     feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "thumbnail_fix", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "mtn_keep", 15),
@@ -127,13 +132,12 @@ def update_articles():
 
     for rss_url, source_name, tag, group, mode, cap in feeds:
         try:
-            r = requests.get(rss_url, timeout=5)
+            r = requests.get(rss_url, headers=headers, timeout=5)
             root = ET.fromstring(r.text)
-            added_count = 0
+            
+            feed_temp_articles = [] # 매체별 기사 임시 저장소
             
             for item in root.findall('.//item'):
-                if added_count >= cap: 
-                    break
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
@@ -171,14 +175,22 @@ def update_articles():
                     pub_node = item.find('pubDate')
                     timestamp = get_safe_timestamp(pub_node.text) if pub_node is not None else datetime.now().timestamp()
                     
-                    new_articles.append({
+                    feed_temp_articles.append({
                         "title": final_title, "link": link, "source": source_name, "tag": tag, 
                         "group": group, "thumb": thumb, "timestamp": timestamp
                     })
-                    existing_links.add(link)
-                    existing_titles.append(final_title)
-                    added_count += 1
                 except: pass
+                
+            # [핵심 로직 교정: 선 정렬 ➔ 후 절단]
+            # 해당 매체에서 수집된 모든 유효 기사를 시간순(가장 최신이 위로) 정렬
+            feed_temp_articles.sort(key=lambda x: x['timestamp'], reverse=True)
+            
+            # 정렬된 최신 기사 중 할당량(cap)만큼만 잘라서 최종 리스트에 추가
+            for art in feed_temp_articles[:cap]:
+                new_articles.append(art)
+                existing_links.add(art['link'])
+                existing_titles.append(art['title'])
+                
         except: pass
 
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
@@ -230,3 +242,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v105.0 (Sort before Cap & User-Agent Bypass)</div>', unsafe_allow_html=True)
