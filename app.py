@@ -10,7 +10,7 @@ from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
 
-# --- [철칙 1: B 유지] 번역기 및 기존 스크래퍼 환경 유지 ---
+# --- [철칙 1: B 유지] 기존 번역 환경 및 기본 설정 사수 ---
 try:
     from deep_translator import GoogleTranslator
     HAS_TRANSLATOR = True
@@ -20,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (담당자님이 컨펌하신 B 영역 디자인 100% 고정 - 배너, 더보기, 폰트 포함)
+# 2. 스타일 시트 (담당자님이 컨펌하신 B 영역 디자인 100% 박제 - 배너, 더보기, 폰트 포함)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -78,34 +78,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# --- [철칙 2: A 수정] 보안망을 거치지 않고 이미지 서버에서 직접 사진 낚아채기 ---
-def get_og_image_smart(url, source_name):
-    # 구글 뉴스 리다이렉트 URL에서 실제 기사 URL로 디코딩 시도
-    real_url = url
-    try:
-        if '/articles/' in url:
-            encoded_part = url.split('/articles/')[1].split('?')[0]
-            encoded_part += "=" * ((4 - len(encoded_part) % 4) % 4)
-            decoded_bytes = base64.urlsafe_b64decode(encoded_part)
-            match = re.search(b'(https?://[a-zA-Z0-9./_?&=-]+)', decoded_bytes)
-            if match: real_url = match.group(1).decode('utf-8')
-    except: pass
-
-    # 기사 ID 기반 이미지 서버 직접 타격 로직 (인벤, 루리웹 등 정밀 조준)
-    try:
-        if "inven.co.kr" in real_url:
-            news_id = re.search(r'news=(\d+)', real_url)
-            if news_id: return f"https://static.inven.co.kr/column/2024/03/26/news/{news_id.group(1)}.jpg"
-        if "ruliweb.com" in real_url:
-            news_id = re.search(r'read/(\d+)', real_url)
-            if news_id: return f"https://i1.ruliweb.com/img/24/03/26/{news_id.group(1)}.jpg"
-    except: pass
-
-    # 최후의 보루: 고해상도 매체 로고 (회색 아이콘 절대 금지)
-    return f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
-
-# 4. DB 및 수집 엔진 (v26 갱신 및 B-로직 철저 보호)
-DB_FILE = "aagig_db_v26.json"
+# 4. DB 및 수집 엔진 (v27 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v27.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -133,6 +107,9 @@ def update_articles():
         ("game site:gamespot.com", "GameSpot", "tag-global", "global")
     ]
 
+    # 미디어 네임스페이스 등록 (A-썸네일 탈취 핵심)
+    media_ns = {'media': 'http://search.yahoo.com/mrss/'}
+
     for query, source_name, tag, group in rss_feeds:
         try:
             url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl={'en-US' if group=='global' else 'ko'}&gl={'US' if group=='global' else 'KR'}&ceid={'US:en' if group=='global' else 'KR:ko'}"
@@ -151,12 +128,22 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # [A 수정 핵심] 썸네일 수집 방식 정밀화
+                    # --- [철칙 2: A-썸네일 강화] 구글이 뚫어놓은 원본 썸네일 직접 낚시 ---
                     thumb = ""
-                    desc = item.find('description').text
-                    img_match = re.search(r'<img[^>]+src="([^"]+)"', desc)
-                    if img_match: thumb = img_match.group(1)
-                    if not thumb: thumb = get_og_image_smart(link, source_name)
+                    # 1순위: media:content 태그 (구글 뉴스 썸네일 서버)
+                    media_content = item.find('media:content', media_ns)
+                    if media_content is not None:
+                        thumb = media_content.get('url')
+                    
+                    # 2순위: description 내부 <img> 태그 (인코딩된 데이터 활용)
+                    if not thumb:
+                        desc_text = item.find('description').text
+                        img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
+                        if img_match: thumb = img_match.group(1)
+                    
+                    # 3순위 폴백: 고해상도 로고
+                    if not thumb:
+                        thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
                     pub_node = item.find('pubDate')
                     dt = parsedate_to_datetime(pub_node.text)
@@ -182,13 +169,13 @@ mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
 # --- [철칙 3: B 보존] 화면 렌더링 (배너, 더보기, 레이아웃 100% 동일 유지) ---
-try: st.image("division8_centered_1800x300.png", use_column_width=True) # 배너 이미지 로드
+try: st.image("division8_centered_1800x300.png", use_column_width=True) # 배너 이미지
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
 def draw_box(col, header, data_list):
     with col:
-        # 더보기 버튼 유지
+        # 더보기 버튼 (디자인 고정)
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         for r in data_list[:8]:
@@ -242,4 +229,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v64.0 (A-Targeting Image Servers & B-Structure Locked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v65.0 (A-RSS Media DeepFetch & B-Layout Frozen)</div>', unsafe_allow_html=True)
