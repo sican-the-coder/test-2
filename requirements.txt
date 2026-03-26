@@ -6,3 +6,6 @@ plotly
 deep-translator
 cloudscraper
 lxml
+playwright
+streamlit-playwright
+lxml
