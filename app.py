@@ -75,8 +75,25 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v32 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v32.json"
+# --- [철칙 2: A-사진 복구] 모바일 브라우저 위장 스캐너 엔진 ---
+def fetch_mobile_og_image(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    }
+    try:
+        # 모바일 위장으로 언론사 메타데이터 낚아채기
+        r = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
+        img_match = re.search(r'property="og:image"\s+content="([^"]+)"', r.text)
+        if img_match:
+            raw_img = img_match.group(1)
+            # 프록시 서버(wsrv.nl)로 보안 우회 결합
+            return f"https://wsrv.nl/?url={urllib.parse.quote(raw_img)}&w=200&h=200&fit=cover"
+    except: pass
+    return None
+
+# 4. DB 및 수집 엔진 (v33 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v33.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -110,7 +127,8 @@ def update_articles():
             r = requests.get(url, timeout=5)
             root = ET.fromstring(r.text)
             
-            for item in root.findall('.//channel/item')[:12]:
+            # 수집 효율을 위해 상위 10개만 정밀 스캔
+            for item in root.findall('.//channel/item')[:10]:
                 try:
                     raw_title = item.find('title').text.strip()
                     clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
@@ -122,15 +140,8 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [철칙 2: A-사진 복구] 이미지 프록시 우회 렌더링 엔진 ---
-                    thumb = ""
-                    desc_text = item.find('description').text
-                    img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
-                    if img_match:
-                        raw_thumb = img_match.group(1)
-                        # 이미지 프록시(wsrv.nl)를 사용하여 구글 차단 우회
-                        thumb = f"https://wsrv.nl/?url={urllib.parse.quote(raw_thumb)}&w=200&h=200&fit=cover"
-                    
+                    # --- [철칙 2: A-사진 복구] 모바일 위장 스캐너 가동 ---
+                    thumb = fetch_mobile_og_image(link)
                     if not thumb: # 실패시 매체 로고 폴백
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
@@ -215,4 +226,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v70.0 (A-Proxy Image Unblocker & B-Layout Locked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v71.0 (A-Mobile Agent Scanner & B-Frozen Design)</div>', unsafe_allow_html=True)
