@@ -62,7 +62,6 @@ def is_similar_title(new_title, existing_titles, threshold=0.65):
             return True
     return False
 
-# 날짜 교정 유지 (v78.0 성과)
 def get_safe_timestamp(pub_date_str):
     now = datetime.now().timestamp()
     try:
@@ -80,7 +79,7 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v42 갱신 및 B-디자인 철저 보호)
+# 4. DB 및 수집 엔진 
 DB_FILE = "aagig_db_v42.json"
 def load_db():
     if os.path.exists(DB_FILE):
@@ -98,14 +97,27 @@ def update_articles():
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
 
-    # --- [철칙: MTN 건들지 마라] 기존 로직 유지 및 국내 썸네일 수술 ---
+    # --- [A구역: 14개 정예 링크 기반 정밀 타겟팅 RSS 교체] ---
     feeds = [
-        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "thumbnail_fix"),
-        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic", "thumbnail_fix"),
+        # 글로벌 & MTN & 네이버 유지
+        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "thumbnail_fix"),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", "mtn_keep"),
         ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", "thumbnail_fix"),
-        ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", "thumbnail_fix")
+        # 정예 매체 추가 (게임메카 리뷰/기획, TIG, ZDNet)
+        ("https://www.thisisgame.com/rss/news", "TIG", "tag-kr", "domestic", "thumbnail_fix"),
+        ("https://www.gamemeca.com/rss/review.xml", "게임메카", "tag-kr", "domestic", "thumbnail_fix"),
+        ("https://www.gamemeca.com/rss/feature.xml", "게임메카", "tag-kr", "domestic", "thumbnail_fix"),
+        ("https://zdnet.co.kr/rss/news/?lstcode=0060", "ZDNet", "tag-kr", "domestic", "thumbnail_fix"),
+        # 구글 RSS 우회 타겟팅 (딜사이트 넥슨, FETV)
+        ("https://news.google.com/rss/search?q=넥슨+site:dealsite.co.kr&hl=ko&gl=KR&ceid=KR:ko", "딜사이트", "tag-biz", "domestic", "thumbnail_fix"),
+        ("https://news.google.com/rss/search?q=게임+site:fetv.co.kr&hl=ko&gl=KR&ceid=KR:ko", "FETV", "tag-biz", "domestic", "thumbnail_fix"),
+        # 커뮤니티 기반 웹진 (블랙리스트 필터링 필수)
+        ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "thumbnail_fix"),
+        ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-kr", "domestic", "thumbnail_fix")
     ]
+
+    # 스팸 필터 (스크린샷에 도배됐던 유저 잡담/단편 등 전면 차단)
+    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '[소설]', '[팬픽]', '[유머]', '[스포]', '[뻘글]']
 
     for rss_url, source_name, tag, group, mode in feeds:
         try:
@@ -115,13 +127,18 @@ def update_articles():
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
+                    
+                    # [핵심 로직] 블랙리스트 필터링 (스팸 기사 건너뛰기)
+                    if any(b in title for b in blacklist):
+                        continue
+
                     if link in existing_links: continue
                     
                     final_title = translate_title(title) if group == "global" else title
                     if is_similar_title(final_title, existing_titles): continue
                     
                     thumb = ""
-                    # [A-국내 썸네일 핀셋 수술] 글로벌 성공 로직 전면 이식
+                    # 썸네일 수술 (v80.0 로직 100% 유지)
                     if mode == "thumbnail_fix":
                         media = item.find('{http://search.yahoo.com/mrss/}content')
                         if media is not None: thumb = media.get('url')
@@ -134,7 +151,6 @@ def update_articles():
                                 match = re.search(r'src="([^"]+)"', desc.text)
                                 if match: thumb = match.group(1)
                     
-                    # [MTN 동결] 기존 로직 보존
                     elif mode == "mtn_keep":
                         desc = item.find('description')
                         if desc is not None:
@@ -160,13 +176,13 @@ def update_articles():
     save_db(final_db[:300])
     return final_db
 
-# [에러 원인이었던 누락된 4줄 완벽 복구]
+# [철칙 준수: 누락 없는 4줄 완벽 복구]
 live_data = update_articles()
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 
-# --- [철칙 3: B 보존] 디자인 100% 동일 유지 ---
+# --- [철칙 3: B 보존] 디자인 및 렌더링 호출부 ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -207,4 +223,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v80.0 (MTN Keep & Domestic Thumbnail Fix)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v99.0 (Elite Curation & Spam Filter Active)</div>', unsafe_allow_html=True)
