@@ -4,3 +4,5 @@ requests
 beautifulsoup4
 plotly
 deep-translator
+cloudscraper
+lxml
