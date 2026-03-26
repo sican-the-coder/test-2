@@ -8,7 +8,7 @@ import urllib.parse
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
-import base64
+import difflib # 유사도 분석 라이브러리 추가
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -20,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (v12.0 디자인 영구 박제)
+# 2. 스타일 시트 (KR, GL 태그 디자인 추가)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -37,6 +37,8 @@ st.markdown("""
     .title-text:hover { color: #3b82f6 !important; text-decoration: underline !important; }
     .meta-area { display: flex; align-items: center; font-size: 10px; color: #aaa; }
     .source-tag { font-weight: 800; padding: 2px 5px; border-radius: 3px; margin-right: 8px; display: inline-block; }
+    
+    /* 매체별 태그 색상 */
     .tag-biz { background-color: #fff1f2; color: #e11d48; }   
     .tag-inven { background-color: #eef2ff; color: #4338ca; } 
     .tag-global { background-color: #fffbeb; color: #d97706; }
@@ -44,36 +46,32 @@ st.markdown("""
     .tag-ds { background-color: #fef2f2; color: #991b1b; }
     .tag-zd { background-color: #f3f4f6; color: #374151; }
     .tag-ruli { background-color: #e0f2fe; color: #0369a1; }
+    
+    /* KR, GL 전용 태그 색상 (요청사항 반영) */
+    .tag-kr { background-color: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+    .tag-gl { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
+
     .mid-banner { background-color: #55587c; color: white; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; margin: 15px 0; border-radius: 4px; }
     .rank-num { font-weight: 800; width: 22px; color: #adb5bd; margin-right: 10px; font-size: 14px; text-align: center; margin-top: 2px; }
     .blue { color: #3b82f6 !important; } .red { color: #ef4444 !important; } .green { color: #10b981 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 매체별 다이내믹 컬러 로고 (Base64 암호화로 블랙박스 에러 영구 차단)
-def get_brand_logo(source_name):
-    colors = {
-        "네이버": "22C55E", "IGN": "EF4444", "GameSpot": "F59E0B", 
-        "루리웹": "3B82F6", "인벤": "6366F1", "MTN": "14B8A6", 
-        "지디넷": "4B5563", "딜사이트": "991B1B"
-    }
-    color = colors.get(source_name, "9CA3AF")
-    initial = source_name[0] if source_name else "N"
-    
-    svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'>
-    <rect width='44' height='44' rx='4' fill='#{color}'/>
-    <text x='50%' y='50%' font-family='sans-serif' font-size='18' font-weight='800' fill='white' text-anchor='middle' dy='.35em'>{initial}</text>
-    </svg>"""
-    b64 = base64.b64encode(svg.encode('utf-8')).decode('utf-8')
-    return f"data:image/svg+xml;base64,{b64}"
-
-# 4. 글로벌 번역기 (이모지 제거, 순수 텍스트만 반환)
+# 3. 글로벌 번역기
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
     if HAS_TRANSLATOR:
         try: return GoogleTranslator(source='auto', target='ko').translate(text)
         except: pass
     return text
+
+# 4. 제목 유사도 판별기 (보도자료 도배 방지)
+def is_similar_title(new_title, existing_titles, threshold=0.65):
+    for ext_title in existing_titles:
+        # 두 제목 간의 유사도가 65% 이상이면 중복(복붙)으로 간주
+        if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold:
+            return True
+    return False
 
 # 5. 상대 시간 계산기
 def get_relative_time(timestamp):
@@ -84,8 +82,8 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 6. 로컬 누적 DB (v13으로 초기화하여 깨끗한 7일 누적 시작)
-DB_FILE = "aagig_db_v13.json"
+# 6. 로컬 누적 DB (v14로 명명하여 꼬인 캐시 완전히 날림)
+DB_FILE = "aagig_db_v14.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -97,21 +95,23 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 7. 클라우드 방화벽 우회 통합 엔진 (격벽 처리 & 30개 수집)
+# 7. 클라우드 방화벽 우회 수집 엔진
 @st.cache_data(ttl=300)
 def update_articles():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     current_db = load_db()
+    existing_links = {item['link'] for item in current_db}
+    existing_titles = [item['title'] for item in current_db] # 유사도 비교용
     new_articles = []
 
-    # 인벤, 루리웹을 확실하게 domestic으로 분류. MTN은 안전한 RSS 엔진 사용.
+    # [수정 2, 4] 네이버 독식 방지 및 타 매체 부활을 위해 site: 연산자로 검색어 전면 개편
     rss_feeds = [
         ("게임", "네이버", "tag-biz", "domestic"),
-        ('게임 source:"지디넷코리아"', "지디넷", "tag-zd", "domestic"),
-        ('넥슨 source:"딜사이트"', "딜사이트", "tag-ds", "domestic"),
-        ('게임 source:"인벤"', "인벤", "tag-inven", "domestic"), 
-        ('게임 source:"루리웹"', "루리웹", "tag-ruli", "domestic"),
-        ('"서정근" source:"머니투데이방송"', "MTN", "tag-mtn", "mtn_only"),
+        ("게임 site:zdnet.co.kr", "지디넷", "tag-zd", "domestic"),
+        ("게임 site:dealsite.co.kr", "딜사이트", "tag-ds", "domestic"),
+        ("게임 site:inven.co.kr", "인벤", "tag-inven", "domestic"), 
+        ("게임 site:ruliweb.com", "루리웹", "tag-ruli", "domestic"),
+        ("서정근 게임 site:mtn.co.kr", "MTN", "tag-mtn", "mtn_only"), # MTN 조건 완화
         ("game site:ign.com", "IGN", "tag-global", "global"),
         ("game site:gamespot.com", "GameSpot", "tag-global", "global")
     ]
@@ -126,51 +126,56 @@ def update_articles():
             r = requests.get(url, headers=headers, timeout=5)
             root = ET.fromstring(r.text)
             
-            # 과거 데이터 누적을 위해 30개까지 긁어옴
-            for item in root.findall('.//channel/item')[:30]:
-                try: # 기사 1개 뻗어도 멈추지 않는 격벽 처리
+            for item in root.findall('.//channel/item')[:15]:
+                try: 
                     raw_title = item.find('title').text.strip() if item.find('title') is not None else ""
                     
-                    # 꼬리표 및 예전 [KR], [GL], 이모지 흔적 무조건 삭제
+                    # [수정 3] 꼬리표 완벽 절단 (마지막 하이픈 뒤 언론사명 제거)
                     clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
+                    # 제목 안의 지저분한 [KR], [GL] 사전 제거
                     clean_title = re.sub(r'\[?(KR|GL)\]?\s*[:-]?\s*', '', clean_title, flags=re.IGNORECASE).strip()
-                    clean_title = re.sub(r'^[🌏🇰🇷]\s*', '', clean_title).strip()
                     
                     if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
                     
                     link = item.find('link').text.strip() if item.find('link') is not None else ""
-                    if not link: continue
+                    if not link or link in existing_links: continue
                     
+                    # 시간 추출
                     pub_node = item.find('pubDate')
                     try:
                         dt = parsedate_to_datetime(pub_node.text)
                         timestamp = dt.timestamp()
                     except: timestamp = datetime.now().timestamp()
                     
-                    # 제목에 KR / GL 텍스트 강제 고정
-                    if group == "global":
-                        final_title = "GL " + translate_title(clean_title)
-                    else:
-                        final_title = "KR " + clean_title
+                    if datetime.now().timestamp() - timestamp > 604800: continue
                     
+                    final_title = translate_title(clean_title) if group == "global" else clean_title
+                    
+                    # [수정 1] 보도자료 도배 방지 (제목 유사도가 65% 이상이면 버림)
+                    if group == "domestic" and is_similar_title(final_title, existing_titles):
+                        continue
+                    
+                    # [수정 6] 썸네일 정밀 추출 (RSS Description 샅샅이 뒤지기)
+                    desc_node = item.find('description')
+                    thumb = ""
+                    if desc_node is not None and desc_node.text:
+                        img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_node.text)
+                        if img_match: thumb = img_match.group(1)
+
                     new_articles.append({
                         "title": final_title, "link": link, "source": source_name, "tag": tag, 
-                        "group": group, "timestamp": timestamp
+                        "group": group, "thumb": thumb, "timestamp": timestamp
                     })
+                    existing_links.add(link)
+                    existing_titles.append(final_title) # 중복 검사 풀에 추가
                 except: pass 
         except: pass 
 
-    # DB 병합(Merge) 로직: 기존 데이터 + 새 데이터 합치고 링크 기준으로 중복 제거 (최신 덮어쓰기)
     combined_db = current_db + new_articles
-    
-    # 정확히 7일(604800초) 지난 기사 커트
     seven_days_ago = datetime.now().timestamp() - 604800
     valid_db = [item for item in combined_db if item['timestamp'] > seven_days_ago]
     
-    # 딕셔너리를 활용한 강력한 중복 링크 제거
     unique_db_dict = {item['link']: item for item in valid_db}
-    
-    # 시간순 정렬
     final_db = sorted(unique_db_dict.values(), key=lambda x: x['timestamp'], reverse=True)
     
     save_db(final_db)
@@ -196,19 +201,25 @@ def draw_box(col, header, data_list):
         if not data_list:
             html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 동기화 중입니다... 5초 뒤 새로고침 해주세요.</div>'
         for r in data_list[:8]:
-            # Base64 다이내믹 로고 (블랙박스 방어 완료)
-            logo_src = get_brand_logo(r['source'])
-            img_tag = f'<img src="{logo_src}">'
+            
+            # [수정 6 반영] 깔끔한 기본 뉴스 아이콘 (이미지 없을 때 대체)
+            fallback_svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23e2e8f0'/><path d='M14 16h16M14 22h16M14 28h8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/></svg>"
+            thumb_src = r.get("thumb") if r.get("thumb") else fallback_svg
             
             real_time_str = get_relative_time(r['timestamp'])
             
+            # [수정 5 반영] KR, GL 텍스트를 제목이 아닌 하단 메타 영역에 색상 구분하여 배치
+            region_tag = "KR" if r['group'] != "global" else "GL"
+            region_class = "tag-kr" if r['group'] != "global" else "tag-gl"
+            
             html += f"""
             <div class="list-row">
-                <div class="thumb-box">{img_tag}</div>
+                <div class="thumb-box"><img src="{thumb_src}" referrerpolicy="no-referrer" onerror="this.src='{fallback_svg}'"></div>
                 <div class="content-area">
                     <a href="{r['link']}" target="_blank" class="title-text">{r['title']}</a>
                     <div class="meta-area">
                         <span class="source-tag {r['tag']}">{r['source']}</span>
+                        <span class="source-tag {region_class}">{region_tag}</span>
                         <span>🕒 {real_time_str}</span>
                     </div>
                 </div>
@@ -247,4 +258,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v51.0 (Final - Safe Merge & B64 Logos)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v52.0 (Deduplication & UI Polish)</div>', unsafe_allow_html=True)
