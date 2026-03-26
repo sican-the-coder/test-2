@@ -79,8 +79,8 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (쓰레기 데이터 완전 소멸을 위해 v44 사용!)
-DB_FILE = "aagig_db_v44.json"
+# 4. DB 및 수집 엔진 (쓰레기 데이터 완전 소멸을 위해 v45 사용!)
+DB_FILE = "aagig_db_v45.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -117,16 +117,22 @@ def update_articles():
         ("https://news.google.com/rss/search?q=게임+site:fetv.co.kr&hl=ko&gl=KR&ceid=KR:ko", "FETV", "tag-biz", "domestic", "thumbnail_fix")
     ]
 
-    # [초강력 이중 필터링 시스템]
-    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '[소설]', '[팬픽]', '[유머]', '[스포]', '[뻘글]', '웹진 - 인벤', '뉴스웹툰', '아시안게임', '올림픽', '챔피언십', '스위밍']
+    # [초강력 이중 필터링 시스템: 서적/만화 차단 추가 및 [정보] 구멍 제거]
+    blacklist = [
+        '[질문]', '[잡담]', '[단편]', '[연재]', '[소설]', '[팬픽]', '[유머]', '[스포]', '[뻘글]', 
+        '웹진 - 인벤', '뉴스웹툰', '아시안게임', '올림픽', '챔피언십', '스위밍',
+        '만화', '할인', '웹툰', '서적', '코믹스'
+    ]
     whitelist_inven = ['[리뷰]', '[프리뷰]', '[인터뷰]', '[기획]', '[특집]', '[핸즈온]', '[신작]', '[정보]']
-    whitelist_ruliweb = ['[PC]', '[PS5]', '[PS4]', '[XSX]', '[XBOX]', '[닌텐도]', '[스위치]', '[모바일]', '[정보]']
+    
+    # 루리웹에서 '[정보]' 제거 완료. 게임 플랫폼 기사만 통과.
+    whitelist_ruliweb = ['[PC]', '[PS5]', '[PS4]', '[XSX]', '[XBOX]', '[닌텐도]', '[스위치]', '[모바일]']
 
     for rss_url, source_name, tag, group, mode in feeds:
         try:
             r = requests.get(rss_url, timeout=5)
             root = ET.fromstring(r.text)
-            for item in root.findall('.//item')[:20]:  # 필터링 대비 넉넉히 수집
+            for item in root.findall('.//item')[:20]:
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
@@ -135,11 +141,11 @@ def update_articles():
                     if any(b in title for b in blacklist):
                         continue
                         
-                    # 2. 인벤 화이트리스트 핀셋 추출 (리뷰/기획/정보 등만 통과)
+                    # 2. 인벤 화이트리스트 핀셋 추출
                     if source_name == "인벤" and not any(w in title for w in whitelist_inven):
                         continue
                         
-                    # 3. 루리웹 화이트리스트 핀셋 추출 (PC/콘솔 머리말만 통과)
+                    # 3. 루리웹 화이트리스트 핀셋 추출 (엄격해짐)
                     if source_name == "루리웹" and not any(w in title for w in whitelist_ruliweb):
                         continue
 
@@ -149,7 +155,6 @@ def update_articles():
                     if is_similar_title(final_title, existing_titles): continue
                     
                     thumb = ""
-                    # 썸네일 수술 (v80.0 로직 100% 유지)
                     if mode == "thumbnail_fix":
                         media = item.find('{http://search.yahoo.com/mrss/}content')
                         if media is not None: thumb = media.get('url')
@@ -234,4 +239,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v101.0 (Strict Whitelist & Clean Cache Active)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v102.0 (Strict Ruliweb Filter & V45 Cache)</div>', unsafe_allow_html=True)
