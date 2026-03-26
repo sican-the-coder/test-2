@@ -11,10 +11,8 @@ import xml.etree.ElementTree as ET
 import difflib
 import base64
 import asyncio
-from bs4 import BeautifulSoup
 
 # --- [최종 병기] Playwright 설정 ---
-# 서버 환경에서 브라우저를 띄워 자바스크립트 보안망을 뚫습니다.
 try:
     from playwright.async_api import async_playwright
     HAS_PLAYWRIGHT = True
@@ -31,7 +29,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (v52.0~v59.0 검증된 디자인 100% 유지)
+# 2. 스타일 시트 (v52.0~v60.0 검증된 디자인 100% 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -87,10 +85,10 @@ def get_relative_time(timestamp):
     return f"{int(diff)}초 전"
 
 # --- [최종 수술 부위] Playwright를 이용한 보안망 돌파 썸네일 탈취 ---
-async def get_og_image_playwright(url):
+async def fetch_og_image(url):
     if not HAS_PLAYWRIGHT: return ""
     
-    # 1단계: 구글 URL 암호 해독 (Base64)
+    # 구글 URL 암호 해독 (Base64)
     real_url = url
     try:
         if '/articles/' in url:
@@ -101,31 +99,30 @@ async def get_og_image_playwright(url):
             if match: real_url = match.group(1).decode('utf-8')
     except: pass
 
-    # 2단계: 실제 브라우저(Playwright) 실행
+    # 실제 브라우저(Playwright)로 보안망 무력화
     try:
         async with async_playwright() as p:
-            # 브라우저 백그라운드 실행
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
-            page = await context.new_page()
+            page = await browser.new_page()
+            # 사람처럼 보이기 위한 헤더 설정
+            await page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             
-            # 보안망이 로봇인지 감시하므로 4초 대기하며 자바스크립트 실행 완료 유도
-            await page.goto(real_url, timeout=10000, wait_until="domcontentloaded")
+            # 접속 (타임아웃은 넉넉하게 12초)
+            await page.goto(real_url, timeout=12000, wait_until="domcontentloaded")
             
-            # og:image 메타 태그 추출
+            # 메타태그에서 og:image 추출
             img_url = await page.get_attribute('meta[property="og:image"]', 'content')
             if not img_url:
                 img_url = await page.get_attribute('meta[name="og:image"]', 'content')
-            
+                
             await browser.close()
-            
             if img_url and "googleusercontent" not in img_url:
                 return img_url
     except: pass
     return ""
 
-# 6. 로컬 누적 DB (v22 갱신)
-DB_FILE = "aagig_db_v22.json"
+# 6. 로컬 누적 DB (v23 갱신)
+DB_FILE = "aagig_db_v23.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -160,8 +157,8 @@ def update_articles():
             r = requests.get(url, timeout=5)
             root = ET.fromstring(r.text)
             
-            # Playwright는 무거우므로 새로 발견된 '핵심' 기사 5개씩만 정밀 타격
-            for item in root.findall('.//channel/item')[:5]:
+            # 무거운 브라우저 작업이므로 발견된 새 기사 4개씩만 정밀 침투
+            for item in root.findall('.//channel/item')[:4]:
                 try:
                     raw_title = item.find('title').text.strip()
                     clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
@@ -170,11 +167,10 @@ def update_articles():
                     link = item.find('link').text.strip()
                     if link in existing_links: continue
                     
-                    # --- [신규 무기] Playwright 비동기 실행 ---
-                    # 스트림릿 환경에서 비동기 함수 실행을 위해 이벤트 루프 사용
-                    thumb = asyncio.run(get_og_image_playwright(link))
+                    # --- [진짜 사진 탈취] Playwright 가동 ---
+                    thumb = asyncio.run(fetch_og_image(link))
                     
-                    # RSS 백업 추출 (미디어 태그가 살아있을 경우 대비)
+                    # RSS 본문 백업 추출
                     if not thumb:
                         desc = item.find('description').text
                         img_match = re.search(r'<img[^>]+src="([^"]+)"', desc)
@@ -205,7 +201,7 @@ glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- 화면 렌더링 (기존 밸런스 100% 유지) ---
+# --- 화면 렌더링 (디자인 100% 보존) ---
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
 def draw_box(col, header, data_list):
@@ -215,7 +211,7 @@ def draw_box(col, header, data_list):
         if not data_list:
             html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터 동기화 중...</div>'
         for r in data_list[:8]:
-            # 폴백 이미지는 매체 로고 API 활용 (사진 없을 때 대안)
+            # 사진 없으면 매체 파비콘 128px 고해상도 로고로 폴백
             fallback = f"https://www.google.com/s2/favicons?domain={r['source']}.com&sz=128"
             thumb = r.get("thumb") if r.get("thumb") else fallback
             region = "KR" if r['group'] != "global" else "GL"
@@ -264,4 +260,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v60.0 (Playwright Browser Automation Deployment)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v61.0 (Final Deployment: Real Image Sync)</div>', unsafe_allow_html=True)
