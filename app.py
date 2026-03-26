@@ -8,7 +8,7 @@ import urllib.parse
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
-import difflib # 유사도 분석 라이브러리 추가
+import difflib
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -20,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (KR, GL 태그 디자인 추가)
+# 2. 스타일 시트 (v52.0의 KR, GL 태그 및 디자인 100% 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -38,7 +38,6 @@ st.markdown("""
     .meta-area { display: flex; align-items: center; font-size: 10px; color: #aaa; }
     .source-tag { font-weight: 800; padding: 2px 5px; border-radius: 3px; margin-right: 8px; display: inline-block; }
     
-    /* 매체별 태그 색상 */
     .tag-biz { background-color: #fff1f2; color: #e11d48; }   
     .tag-inven { background-color: #eef2ff; color: #4338ca; } 
     .tag-global { background-color: #fffbeb; color: #d97706; }
@@ -47,7 +46,6 @@ st.markdown("""
     .tag-zd { background-color: #f3f4f6; color: #374151; }
     .tag-ruli { background-color: #e0f2fe; color: #0369a1; }
     
-    /* KR, GL 전용 태그 색상 (요청사항 반영) */
     .tag-kr { background-color: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
     .tag-gl { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
 
@@ -65,10 +63,9 @@ def translate_title(text):
         except: pass
     return text
 
-# 4. 제목 유사도 판별기 (보도자료 도배 방지)
+# 4. 제목 유사도 판별기 (도배 방지 유지)
 def is_similar_title(new_title, existing_titles, threshold=0.65):
     for ext_title in existing_titles:
-        # 두 제목 간의 유사도가 65% 이상이면 중복(복붙)으로 간주
         if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold:
             return True
     return False
@@ -82,8 +79,22 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# 6. 로컬 누적 DB (v14로 명명하여 꼬인 캐시 완전히 날림)
-DB_FILE = "aagig_db_v14.json"
+# --- [신규 추가] 진짜 사진(og:image) 고속 추출기 ---
+def get_og_image(url):
+    try:
+        # 앱 로딩 지연을 막기 위해 1.5초 타임아웃의 초고속 찌르기
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=1.5)
+        # 정규식으로 og:image 메타 태그만 쏙 빼옵니다
+        match = re.search(r'<meta\s+(?:[^>]*\s+)?property="og:image"\s+content="([^"]+)"', r.text)
+        if not match:
+            match = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', r.text)
+        if match:
+            return match.group(1)
+    except: pass
+    return ""
+
+# 6. 로컬 누적 DB (v15로 명명하여 썸네일 캐시 갱신, 7일 롤링)
+DB_FILE = "aagig_db_v15.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -101,17 +112,17 @@ def update_articles():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
-    existing_titles = [item['title'] for item in current_db] # 유사도 비교용
+    existing_titles = [item['title'] for item in current_db] 
     new_articles = []
 
-    # [수정 2, 4] 네이버 독식 방지 및 타 매체 부활을 위해 site: 연산자로 검색어 전면 개편
+    # 네이버 독식 방지 쿼리 100% 유지
     rss_feeds = [
         ("게임", "네이버", "tag-biz", "domestic"),
         ("게임 site:zdnet.co.kr", "지디넷", "tag-zd", "domestic"),
         ("게임 site:dealsite.co.kr", "딜사이트", "tag-ds", "domestic"),
         ("게임 site:inven.co.kr", "인벤", "tag-inven", "domestic"), 
         ("게임 site:ruliweb.com", "루리웹", "tag-ruli", "domestic"),
-        ("서정근 게임 site:mtn.co.kr", "MTN", "tag-mtn", "mtn_only"), # MTN 조건 완화
+        ("서정근 게임 site:mtn.co.kr", "MTN", "tag-mtn", "mtn_only"),
         ("game site:ign.com", "IGN", "tag-global", "global"),
         ("game site:gamespot.com", "GameSpot", "tag-global", "global")
     ]
@@ -130,9 +141,8 @@ def update_articles():
                 try: 
                     raw_title = item.find('title').text.strip() if item.find('title') is not None else ""
                     
-                    # [수정 3] 꼬리표 완벽 절단 (마지막 하이픈 뒤 언론사명 제거)
+                    # 꼬리표 절단 & KR/GL 지우기 100% 유지
                     clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
-                    # 제목 안의 지저분한 [KR], [GL] 사전 제거
                     clean_title = re.sub(r'\[?(KR|GL)\]?\s*[:-]?\s*', '', clean_title, flags=re.IGNORECASE).strip()
                     
                     if len(clean_title) < 5 or clean_title.upper() == "NAVER": continue
@@ -140,7 +150,6 @@ def update_articles():
                     link = item.find('link').text.strip() if item.find('link') is not None else ""
                     if not link or link in existing_links: continue
                     
-                    # 시간 추출
                     pub_node = item.find('pubDate')
                     try:
                         dt = parsedate_to_datetime(pub_node.text)
@@ -151,28 +160,32 @@ def update_articles():
                     
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     
-                    # [수정 1] 보도자료 도배 방지 (제목 유사도가 65% 이상이면 버림)
                     if group == "domestic" and is_similar_title(final_title, existing_titles):
                         continue
                     
-                    # [수정 6] 썸네일 정밀 추출 (RSS Description 샅샅이 뒤지기)
+                    # --- [신규 추가] 썸네일 정밀 추출 로직 ---
                     desc_node = item.find('description')
                     thumb = ""
+                    # 1순위: RSS 본문에서 이미지 찾기
                     if desc_node is not None and desc_node.text:
                         img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_node.text)
                         if img_match: thumb = img_match.group(1)
+                    
+                    # 2순위: RSS에 없으면 기사 링크로 1.5초간 접속해서 og:image 훔쳐오기
+                    if not thumb:
+                        thumb = get_og_image(link)
 
                     new_articles.append({
                         "title": final_title, "link": link, "source": source_name, "tag": tag, 
                         "group": group, "thumb": thumb, "timestamp": timestamp
                     })
                     existing_links.add(link)
-                    existing_titles.append(final_title) # 중복 검사 풀에 추가
+                    existing_titles.append(final_title) 
                 except: pass 
         except: pass 
 
     combined_db = current_db + new_articles
-    seven_days_ago = datetime.now().timestamp() - 604800
+    seven_days_ago = datetime.now().timestamp() - 604800 # 7일 후 썸네일 포함 자동 삭제 (롤링 캐시)
     valid_db = [item for item in combined_db if item['timestamp'] > seven_days_ago]
     
     unique_db_dict = {item['link']: item for item in valid_db}
@@ -202,13 +215,13 @@ def draw_box(col, header, data_list):
             html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 동기화 중입니다... 5초 뒤 새로고침 해주세요.</div>'
         for r in data_list[:8]:
             
-            # [수정 6 반영] 깔끔한 기본 뉴스 아이콘 (이미지 없을 때 대체)
+            # 썸네일 출력부 (실제 사진 적용 완료)
             fallback_svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23e2e8f0'/><path d='M14 16h16M14 22h16M14 28h8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/></svg>"
             thumb_src = r.get("thumb") if r.get("thumb") else fallback_svg
             
             real_time_str = get_relative_time(r['timestamp'])
             
-            # [수정 5 반영] KR, GL 텍스트를 제목이 아닌 하단 메타 영역에 색상 구분하여 배치
+            # KR/GL 뱃지 하단 배치 100% 유지
             region_tag = "KR" if r['group'] != "global" else "GL"
             region_class = "tag-kr" if r['group'] != "global" else "tag-gl"
             
@@ -258,4 +271,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v52.0 (Deduplication & UI Polish)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v53.0 (Real Thumbnails Added)</div>', unsafe_allow_html=True)
