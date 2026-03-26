@@ -29,7 +29,7 @@ st.markdown("""
     @media (min-width: 1200px) { .block-container { max-width: 1100px !important; margin: auto !important; padding-top: 1.5rem !important; } }
     .sub-logo-header { text-align: center; color: #3e4156; font-size: 20px; font-weight: 700; margin-top: 5px; margin-bottom: 25px; letter-spacing: -0.04em; }
     .section-bar { background-color: #55587c; color: white; padding: 6px 12px; font-size: 13px; font-weight: 700; border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center; }
-    .custom-box { background-color: white; border: 1px solid #ddd; border-top: none; margin-bottom: 18박; min-height: 280px; }
+    .custom-box { background-color: white; border: 1px solid #ddd; border-top: none; margin-bottom: 18px; min-height: 280px; }
     .list-row { display: flex; padding: 8px 12px; border-bottom: 1px solid #f2f2f2; align-items: flex-start; text-decoration: none !important; }
     .thumb-box { width: 44px; height: 44px; margin-right: 12px; border-radius: 4px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-top: 2px; }
     .thumb-box img { width: 100%; height: 100%; object-fit: cover; }
@@ -76,11 +76,11 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# --- [철칙 4: 반복 실수 확인] 새로운 방식 - 서버가 이미지를 직접 들고 와서 데이터로 전송 ---
+# --- [철칙 4: 신규 방식] 서버 메모리 직송(Base64) 엔진 ---
 def get_image_as_base64(url):
     if not url: return None
     try:
-        # 서버가 직접 이미지 바이너리를 낚아챔 (브라우저 차단 우회)
+        # 서버가 보안망을 직접 통과하여 이미지를 낚아챔
         res = requests.get(url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
         if res.status_code == 200:
             encoded = base64.b64encode(res.content).decode()
@@ -135,12 +135,12 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [철칙 4: 반복 실수 차단] 서버 메모리 직송 방식 적용 ---
+                    # --- [신규 공법 적용] 주소가 아닌 데이터 자체를 수집 ---
                     thumb = None
                     desc_text = item.find('description').text
                     img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
                     if img_match:
-                        # 주소를 주는 게 아니라 이미지를 텍스트(Base64)로 변환해 버림
+                        # 서버 메모리에 저장 후 Base64 전송
                         thumb = get_image_as_base64(img_match.group(1))
                     
                     if not thumb: # 실패시 정규화된 매체 로고
@@ -184,7 +184,6 @@ def draw_box(col, header, data_list):
             region = "KR" if r['group'] != "global" else "GL"
             reg_cls = "tag-kr" if r['group'] != "global" else "tag-gl"
             
-            # 썸네일 노출부: 서버가 보내준 데이터 그대로 박기
             html += f"""
             <div class="list-row">
                 <div class="thumb-box"><img src="{thumb}" onerror="this.src='{fallback}'"></div>
@@ -228,4 +227,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v74.0 (A-Binary Stream Direct & B-Layout Locked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v74.0 (A-Binary Injection & B-Frozen Layout)</div>', unsafe_allow_html=True)
