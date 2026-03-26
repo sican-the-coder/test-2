@@ -75,20 +75,23 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# --- [철칙 2: A-썸네일 강화] 네이버 검색 썸네일 서버 활용 ---
-def get_naver_thumbnail(title):
+# --- [철칙 2: A-썸네일 강화] 네이버 검색 썸네일 경로 정밀 타격 ---
+def get_naver_thumbnail_v2(title, source):
     try:
-        # 네이버 뉴스 검색 결과 페이지에서 해당 제목의 썸네일만 낚아챔 (API 대용 우회로)
-        search_url = f"https://search.naver.com/search.naver?where=news&query={urllib.parse.quote(title)}"
-        r = requests.get(search_url, timeout=3)
-        # 네이버가 미리 긁어온 썸네일 이미지 주소 추출
-        img_match = re.search(r'data-src="([^"]+thumb[^"]+)"', r.text)
-        if img_match: return img_match.group(1)
+        # 제목과 매체명을 조합하여 정확한 썸네일을 유도
+        query = f"{source} {title}"
+        search_url = f"https://search.naver.com/search.naver?where=news&query={urllib.parse.quote(query)}"
+        r = requests.get(search_url, timeout=3, headers={'User-Agent': 'Mozilla/5.0'})
+        
+        # 썸네일 이미지 URL 추출 정규표현식 (네이버 뉴스 검색의 다양한 이미지 패턴 대응)
+        # 클래스명 'thumb'이나 'dsc_thumb' 내의 src/data-src 속성 타격
+        img_match = re.search(r'https://search.pstatic.net/common/\?src=[^"]+', r.text)
+        if img_match: return img_match.group(0)
     except: pass
     return ""
 
-# 4. DB 및 수집 엔진 (v28 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v28.json"
+# 4. DB 및 수집 엔진 (v29 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v29.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -134,9 +137,9 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [철칙 2: A-사진 복구] 네이버 썸네일 백업 엔진 가동 ---
-                    thumb = get_naver_thumbnail(final_title)
-                    if not thumb: # 네이버에서 실패시 로고 폴백
+                    # --- [철칙 2: A-사진 복구] 네이버 썸네일 정밀 타격 가동 ---
+                    thumb = get_naver_thumbnail_v2(final_title, source_name)
+                    if not thumb:
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
                     pub_node = item.find('pubDate')
@@ -191,6 +194,7 @@ def draw_box(col, header, data_list):
             </div>"""
         html += '</div>'; st.markdown(html, unsafe_allow_html=True)
 
+# 2단 6분할 레이아웃 유지
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체/웹진", dom)
 draw_box(r1_c2, "글로벌 트렌드", glo)
@@ -205,6 +209,7 @@ draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
+# 하단 3단 랭킹 구조 유지
 b1, b2, b3 = st.columns(3)
 def draw_rank(col, header, data_list, color):
     with col:
@@ -220,4 +225,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v66.0 (A-Naver Proxy Thumbnails & B-Frozen Design)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v67.0 (A-Naver Precision Thumbnails & B-Layout Locked)</div>', unsafe_allow_html=True)
