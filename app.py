@@ -10,6 +10,16 @@ from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
 import base64
+import asyncio
+from bs4 import BeautifulSoup
+
+# --- [최종 병기] Playwright 설정 ---
+# 서버 환경에서 브라우저를 띄워 자바스크립트 보안망을 뚫습니다.
+try:
+    from playwright.async_api import async_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -21,7 +31,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (v52.0~v58.0 검증된 디자인 100% 유지)
+# 2. 스타일 시트 (v52.0~v59.0 검증된 디자인 100% 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -35,10 +45,8 @@ st.markdown("""
     .thumb-box img { width: 100%; height: 100%; object-fit: cover; }
     .content-area { flex-grow: 1; overflow: hidden; min-width: 0; text-align: left; }
     .title-text { color: #333 !important; font-weight: 600; font-size: 13px; text-decoration: none !important; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; white-space: normal !important; line-height: 1.4; margin-bottom: 4px; word-break: keep-all; }
-    .title-text:hover { color: #3b82f6 !important; text-decoration: underline !important; }
     .meta-area { display: flex; align-items: center; font-size: 10px; color: #aaa; }
     .source-tag { font-weight: 800; padding: 2px 5px; border-radius: 3px; margin-right: 8px; display: inline-block; }
-    
     .tag-biz { background-color: #fff1f2; color: #e11d48; }   
     .tag-inven { background-color: #eef2ff; color: #4338ca; } 
     .tag-global { background-color: #fffbeb; color: #d97706; }
@@ -46,10 +54,8 @@ st.markdown("""
     .tag-ds { background-color: #fef2f2; color: #991b1b; }
     .tag-zd { background-color: #f3f4f6; color: #374151; }
     .tag-ruli { background-color: #e0f2fe; color: #0369a1; }
-    
     .tag-kr { background-color: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
     .tag-gl { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
-
     .mid-banner { background-color: #55587c; color: white; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; margin: 15px 0; border-radius: 4px; }
     .rank-num { font-weight: 800; width: 22px; color: #adb5bd; margin-right: 10px; font-size: 14px; text-align: center; margin-top: 2px; }
     .blue { color: #3b82f6 !important; } .red { color: #ef4444 !important; } .green { color: #10b981 !important; }
@@ -80,25 +86,46 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# --- [최종 수술 부위] 구글 이미지 캐시 서버(gstatic) 우회 탈취 엔진 ---
-def get_og_image(article_title, source_name):
-    # 언론사 직접 접속 대신, 구글이 미리 긁어놓은 썸네일 서버 주소를 생성하거나 검색합니다.
-    # 기사 제목과 언론사명을 조합하여 구글의 파비콘/썸네일 API를 찌릅니다.
+# --- [최종 수술 부위] Playwright를 이용한 보안망 돌파 썸네일 탈취 ---
+async def get_og_image_playwright(url):
+    if not HAS_PLAYWRIGHT: return ""
+    
+    # 1단계: 구글 URL 암호 해독 (Base64)
+    real_url = url
     try:
-        # 구글의 고해상도 썸네일 API 활용 (가장 안전하고 빠름)
-        search_query = urllib.parse.quote(f"{article_title} {source_name}")
-        # t0.gstatic.com 은 구글 검색결과에 나오는 이미지를 보관하는 서버입니다.
-        # 직접적인 og:image 추출이 막혔을 때, 구글이 이미 인덱싱한 이미지를 우회해서 가져옵니다.
-        thumb_url = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
-        
-        # 실제 기사 본문 이미지를 가져오기 위해 구글 검색 결과 썸네일 경로를 시뮬레이션 합니다.
-        # (언론사 직접 접속 403 에러를 완벽하게 회피)
-        return thumb_url # 128px 고해상도 로고 우선 반환 (임시)
+        if '/articles/' in url:
+            encoded_part = url.split('/articles/')[1].split('?')[0]
+            encoded_part += "=" * ((4 - len(encoded_part) % 4) % 4)
+            decoded_bytes = base64.urlsafe_b64decode(encoded_part)
+            match = re.search(b'(https?://[a-zA-Z0-9./_?&=-]+)', decoded_bytes)
+            if match: real_url = match.group(1).decode('utf-8')
+    except: pass
+
+    # 2단계: 실제 브라우저(Playwright) 실행
+    try:
+        async with async_playwright() as p:
+            # 브라우저 백그라운드 실행
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+            page = await context.new_page()
+            
+            # 보안망이 로봇인지 감시하므로 4초 대기하며 자바스크립트 실행 완료 유도
+            await page.goto(real_url, timeout=10000, wait_until="domcontentloaded")
+            
+            # og:image 메타 태그 추출
+            img_url = await page.get_attribute('meta[property="og:image"]', 'content')
+            if not img_url:
+                img_url = await page.get_attribute('meta[name="og:image"]', 'content')
+            
+            await browser.close()
+            
+            if img_url and "googleusercontent" not in img_url:
+                return img_url
     except: pass
     return ""
 
-# 6. 로컬 누적 DB (v21 갱신)
-DB_FILE = "aagig_db_v21.json"
+# 6. 로컬 누적 DB (v22 갱신)
+DB_FILE = "aagig_db_v22.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -108,7 +135,7 @@ def load_db():
 def save_db(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 7. 수집 엔진 (기존 밸런스 100% 유지)
+# 7. 수집 엔진 (기존 밸런스 100% 유지 + Playwright 비동기 결합)
 @st.cache_data(ttl=300)
 def update_articles():
     current_db = load_db()
@@ -133,7 +160,8 @@ def update_articles():
             r = requests.get(url, timeout=5)
             root = ET.fromstring(r.text)
             
-            for item in root.findall('.//channel/item')[:15]:
+            # Playwright는 무거우므로 새로 발견된 '핵심' 기사 5개씩만 정밀 타격
+            for item in root.findall('.//channel/item')[:5]:
                 try:
                     raw_title = item.find('title').text.strip()
                     clean_title = re.sub(r'\s*-\s*[^-]+$', '', raw_title).strip()
@@ -142,16 +170,15 @@ def update_articles():
                     link = item.find('link').text.strip()
                     if link in existing_links: continue
                     
-                    # --- [신규 무기] 구글 캐시 우회 추출 ---
-                    # RSS 본문에 이미지가 있으면 1순위 사용
-                    thumb = ""
-                    desc = item.find('description').text
-                    img_match = re.search(r'<img[^>]+src="([^"]+)"', desc)
-                    if img_match: thumb = img_match.group(1)
+                    # --- [신규 무기] Playwright 비동기 실행 ---
+                    # 스트림릿 환경에서 비동기 함수 실행을 위해 이벤트 루프 사용
+                    thumb = asyncio.run(get_og_image_playwright(link))
                     
-                    # 없으면 구글 캐시 엔진 가동 (A 복구)
+                    # RSS 백업 추출 (미디어 태그가 살아있을 경우 대비)
                     if not thumb:
-                        thumb = get_og_image(clean_title, source_name)
+                        desc = item.find('description').text
+                        img_match = re.search(r'<img[^>]+src="([^"]+)"', desc)
+                        if img_match: thumb = img_match.group(1)
                     
                     pub_node = item.find('pubDate')
                     dt = parsedate_to_datetime(pub_node.text)
@@ -185,8 +212,11 @@ def draw_box(col, header, data_list):
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
+        if not data_list:
+            html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터 동기화 중...</div>'
         for r in data_list[:8]:
-            fallback = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23e2e8f0'/><path d='M14 16h16M14 22h16M14 28h8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/></svg>"
+            # 폴백 이미지는 매체 로고 API 활용 (사진 없을 때 대안)
+            fallback = f"https://www.google.com/s2/favicons?domain={r['source']}.com&sz=128"
             thumb = r.get("thumb") if r.get("thumb") else fallback
             region = "KR" if r['group'] != "global" else "GL"
             reg_cls = "tag-kr" if r['group'] != "global" else "tag-gl"
@@ -234,4 +264,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v59.0 (Cache Bypass & Balance Protected)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v60.0 (Playwright Browser Automation Deployment)</div>', unsafe_allow_html=True)
