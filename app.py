@@ -75,8 +75,18 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v34 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v34.json"
+# --- [철칙 4: 반복 실수 확인] 서버 사이드 이미지 검증 (프록시/위장 방식 폐기) ---
+def validate_image_url(url):
+    if not url or "googleusercontent" in url: return None # 차단 위험 주소는 즉시 배제
+    try:
+        # 서버에서 헤더만 살짝 찔러서 유효성 체크
+        res = requests.head(url, timeout=1)
+        if res.status_code == 200: return url
+    except: pass
+    return None
+
+# 4. DB 및 수집 엔진 (v35 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v35.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -122,8 +132,16 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [철칙 2: A-데이터 정규화] 불안정한 우회 전면 제거 및 고해상도 로고 정착 ---
-                    thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
+                    # --- [철칙 4: 반복 실수 확인] 서버 사이드 선별 수집 ---
+                    thumb = None
+                    desc_text = item.find('description').text
+                    img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
+                    if img_match:
+                        # 검증된 주소만 할당, 아니면 None (로고 폴백)
+                        thumb = validate_image_url(img_match.group(1))
+                    
+                    if not thumb: # 안전한 매체 로고 기본값
+                        thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
                     pub_node = item.find('pubDate')
                     dt = parsedate_to_datetime(pub_node.text)
@@ -206,4 +224,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v72.0 (A-Stabilized & B-Frozen Design)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v73.0 (A-Safe Image Validation & B-Frozen Design)</div>', unsafe_allow_html=True)
