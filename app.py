@@ -9,6 +9,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
+import base64 # 구글 암호 해독을 위한 모듈 추가
 
 # --- [안전장치] deep-translator 모듈 ---
 try:
@@ -63,7 +64,7 @@ def translate_title(text):
         except: pass
     return text
 
-# 4. 제목 유사도 판별기 (도배 방지 유지)
+# 4. 제목 유사도 판별기
 def is_similar_title(new_title, existing_titles, threshold=0.65):
     for ext_title in existing_titles:
         if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold:
@@ -79,46 +80,63 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# --- [핵심 수술 부위] 구글 대기실 뚫고 2단계 접속하는 og:image 추출기 ---
+# --- [최종 수술 부위] URL 암호 해독 및 완벽한 사람 위장 엔진 ---
 def get_og_image(url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    real_url = url
+    
+    # 1단계: 구글 뉴스의 Base64 URL 껍데기를 파이썬으로 직접 벗겨냅니다 (서버 접속 없이 해독)
     try:
-        # 1단계: 구글 경유지 접속 (자바스크립트나 메타리프레시에 막힘)
-        r1 = requests.get(url, headers=headers, timeout=2.5, allow_redirects=True)
-        html_text = r1.text
-        real_url = url
+        if '/articles/' in url:
+            encoded_part = url.split('/articles/')[1].split('?')[0]
+            # Base64 패딩 맞추기
+            encoded_part += "=" * ((4 - len(encoded_part) % 4) % 4)
+            decoded_bytes = base64.urlsafe_b64decode(encoded_part)
+            # 해독된 데이터 속에서 진짜 http:// 언론사 주소만 정규식으로 핀셋 추출
+            match = re.search(b'(https?://[a-zA-Z0-9./_?&=-]+)', decoded_bytes)
+            if match:
+                real_url = match.group(1).decode('utf-8')
+    except: pass
+
+    # 2단계: 언론사 봇 차단(403 Forbidden)을 뚫기 위한 강력한 '크롬 브라우저' 위장
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
+        "Referer": "https://news.google.com/"
+    }
+
+    try:
+        # 암호 해독에 실패했을 경우를 대비한 기존 대기실 돌파 로직 병행
+        if real_url == url:
+            r1 = requests.get(url, headers=headers, timeout=2.5, allow_redirects=True)
+            refresh_match = re.search(r'url=([^"\']+)', r1.text, re.IGNORECASE)
+            if refresh_match:
+                real_url = refresh_match.group(1)
+            else:
+                a_match = re.search(r'<a\s+(?:[^>]*?\s+)?href="([^"]+)"', r1.text, re.IGNORECASE)
+                if a_match and "google.com" not in a_match.group(1):
+                    real_url = a_match.group(1)
         
-        # 구글 대기실 HTML에서 '진짜 언론사 주소'를 뜯어냄 (메타 리프레시 추적)
-        refresh_match = re.search(r'url=([^"\']+)', html_text, re.IGNORECASE)
-        if refresh_match:
-            real_url = refresh_match.group(1)
-        else:
-            # <a> 태그에 숨겨진 경우 추적
-            a_match = re.search(r'<a\s+(?:[^>]*?\s+)?href="([^"]+)"', html_text, re.IGNORECASE)
-            if a_match and "google.com" not in a_match.group(1):
-                real_url = a_match.group(1)
-
-        # 2단계: 뜯어낸 진짜 언론사 주소로 다이렉트 2차 접속!
-        if real_url != url:
-            r2 = requests.get(real_url, headers=headers, timeout=2.5, allow_redirects=True)
-            html_text = r2.text
-
-        # 마침내 도착한 진짜 언론사 페이지에서 og:image 사진 탈취
+        real_url = real_url.replace('&amp;', '&')
+        
+        # 3단계: 알아낸 진짜 언론사 주소로 위장 접속하여 사진(og:image) 탈취
+        r2 = requests.get(real_url, headers=headers, timeout=3.0, allow_redirects=True)
+        html_text = r2.text
+        
         match = re.search(r'<meta\s+(?:[^>]*\s+)?property="og:image"\s+content="([^"]+)"', html_text, re.IGNORECASE)
         if not match:
             match = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', html_text, re.IGNORECASE)
             
         if match:
             img_url = match.group(1)
-            # 구글 찌꺼기 이미지 및 파비콘 필터링
-            if "googleusercontent" in img_url or "news.google.com" in img_url or "favicon" in img_url:
+            # 쓸모없는 구글 기본 로고나 투명 이미지는 확실히 버림
+            if "googleusercontent" in img_url or "news.google.com" in img_url or "favicon" in img_url or "blank" in img_url:
                 return ""
             return img_url
     except: pass
     return ""
 
-# 6. 로컬 누적 DB (v17로 명명하여 회색 아이콘 캐시 전부 날림)
-DB_FILE = "aagig_db_v17.json"
+# 6. 로컬 누적 DB (v18로 명명하여 캐시 완벽 갱신)
+DB_FILE = "aagig_db_v18.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -191,7 +209,6 @@ def update_articles():
                         img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_node.text)
                         if img_match: thumb = img_match.group(1)
                     
-                    # 1순위로 사진이 없으면 2단계 다이렉트 우회 접속기 가동!
                     if not thumb:
                         thumb = get_og_image(link)
 
@@ -235,7 +252,6 @@ def draw_box(col, header, data_list):
             html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 동기화 중입니다... 5초 뒤 새로고침 해주세요.</div>'
         for r in data_list[:8]:
             
-            # 최후의 보루: 진짜 언론사에도 사진이 없을 때만 뜨는 땜빵용 아이콘
             fallback_svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23e2e8f0'/><path d='M14 16h16M14 22h16M14 28h8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/></svg>"
             thumb_src = r.get("thumb") if r.get("thumb") else fallback_svg
             
@@ -290,4 +306,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v55.0 (2-Step Real Image Fetch & Balance Protected)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v56.0 (Base64 Decode & Anti-Bot Spoofing)</div>', unsafe_allow_html=True)
