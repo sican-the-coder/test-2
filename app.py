@@ -20,7 +20,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (기존 디자인 100% 유지)
+# 2. 스타일 시트 (기존 디자인 및 KR/GL 태그 100% 유지)
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -63,7 +63,7 @@ def translate_title(text):
         except: pass
     return text
 
-# 4. 제목 유사도 판별기
+# 4. 제목 유사도 판별기 (도배 방지 유지)
 def is_similar_title(new_title, existing_titles, threshold=0.65):
     for ext_title in existing_titles:
         if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold:
@@ -79,28 +79,46 @@ def get_relative_time(timestamp):
     if diff >= 60: return f"{int(diff // 60)}분 전"
     return f"{int(diff)}초 전"
 
-# --- [핵심 수정부] 진짜 사진(og:image) 구글 경유지 돌파 및 필터링 엔진 ---
+# --- [핵심 수술 부위] 구글 대기실 뚫고 2단계 접속하는 og:image 추출기 ---
 def get_og_image(url):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        # allow_redirects=True(기본값)를 통해 구글 경유지를 뚫고 최종 언론사 도착. 시간은 2.5초 여유 부여.
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=2.5, allow_redirects=True)
-        html_text = r.text
+        # 1단계: 구글 경유지 접속 (자바스크립트나 메타리프레시에 막힘)
+        r1 = requests.get(url, headers=headers, timeout=2.5, allow_redirects=True)
+        html_text = r1.text
+        real_url = url
         
-        match = re.search(r'<meta\s+(?:[^>]*\s+)?property="og:image"\s+content="([^"]+)"', html_text)
+        # 구글 대기실 HTML에서 '진짜 언론사 주소'를 뜯어냄 (메타 리프레시 추적)
+        refresh_match = re.search(r'url=([^"\']+)', html_text, re.IGNORECASE)
+        if refresh_match:
+            real_url = refresh_match.group(1)
+        else:
+            # <a> 태그에 숨겨진 경우 추적
+            a_match = re.search(r'<a\s+(?:[^>]*?\s+)?href="([^"]+)"', html_text, re.IGNORECASE)
+            if a_match and "google.com" not in a_match.group(1):
+                real_url = a_match.group(1)
+
+        # 2단계: 뜯어낸 진짜 언론사 주소로 다이렉트 2차 접속!
+        if real_url != url:
+            r2 = requests.get(real_url, headers=headers, timeout=2.5, allow_redirects=True)
+            html_text = r2.text
+
+        # 마침내 도착한 진짜 언론사 페이지에서 og:image 사진 탈취
+        match = re.search(r'<meta\s+(?:[^>]*\s+)?property="og:image"\s+content="([^"]+)"', html_text, re.IGNORECASE)
         if not match:
-            match = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', html_text)
+            match = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', html_text, re.IGNORECASE)
             
         if match:
             img_url = match.group(1)
-            # 구글 뉴스 기본 껍데기 이미지이거나 파비콘이면 무시하고 버림
+            # 구글 찌꺼기 이미지 및 파비콘 필터링
             if "googleusercontent" in img_url or "news.google.com" in img_url or "favicon" in img_url:
                 return ""
             return img_url
     except: pass
     return ""
 
-# 6. 로컬 누적 DB (v16으로 명명하여 구글 아이콘 캐시 전부 날림)
-DB_FILE = "aagig_db_v16.json"
+# 6. 로컬 누적 DB (v17로 명명하여 회색 아이콘 캐시 전부 날림)
+DB_FILE = "aagig_db_v17.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -173,6 +191,7 @@ def update_articles():
                         img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_node.text)
                         if img_match: thumb = img_match.group(1)
                     
+                    # 1순위로 사진이 없으면 2단계 다이렉트 우회 접속기 가동!
                     if not thumb:
                         thumb = get_og_image(link)
 
@@ -216,6 +235,7 @@ def draw_box(col, header, data_list):
             html += '<div style="padding:20px; text-align:center; color:#999; font-size:12px;">데이터를 동기화 중입니다... 5초 뒤 새로고침 해주세요.</div>'
         for r in data_list[:8]:
             
+            # 최후의 보루: 진짜 언론사에도 사진이 없을 때만 뜨는 땜빵용 아이콘
             fallback_svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='44' height='44'><rect width='44' height='44' fill='%23e2e8f0'/><path d='M14 16h16M14 22h16M14 28h8' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'/></svg>"
             thumb_src = r.get("thumb") if r.get("thumb") else fallback_svg
             
@@ -270,4 +290,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v54.0 (Real OG:Image Fetch + Layout Preserved)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v55.0 (2-Step Real Image Fetch & Balance Protected)</div>', unsafe_allow_html=True)
