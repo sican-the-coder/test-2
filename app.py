@@ -37,7 +37,6 @@ st.markdown("""
     .title-text:hover { color: #3b82f6 !important; text-decoration: underline !important; }
     .meta-area { display: flex; align-items: center; font-size: 10px; color: #aaa; }
     .source-tag { font-weight: 800; padding: 2px 5px; border-radius: 3px; margin-right: 8px; display: inline-block; }
-    
     .tag-biz { background-color: #fff1f2; color: #e11d48; }   
     .tag-inven { background-color: #eef2ff; color: #4338ca; } 
     .tag-global { background-color: #fffbeb; color: #d97706; }
@@ -45,10 +44,8 @@ st.markdown("""
     .tag-ds { background-color: #fef2f2; color: #991b1b; }
     .tag-zd { background-color: #f3f4f6; color: #374151; }
     .tag-ruli { background-color: #e0f2fe; color: #0369a1; }
-    
     .tag-kr { background-color: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
     .tag-gl { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
-
     .mid-banner { background-color: #55587c; color: white; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; margin: 15px 0; border-radius: 4px; }
     .rank-num { font-weight: 800; width: 22px; color: #adb5bd; margin-right: 10px; font-size: 14px; text-align: center; margin-top: 2px; }
     .blue { color: #3b82f6 !important; } .red { color: #ef4444 !important; } .green { color: #10b981 !important; }
@@ -78,8 +75,20 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v27 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v27.json"
+# --- [철칙 2: A-썸네일 강화] 네이버 검색 썸네일 서버 활용 ---
+def get_naver_thumbnail(title):
+    try:
+        # 네이버 뉴스 검색 결과 페이지에서 해당 제목의 썸네일만 낚아챔 (API 대용 우회로)
+        search_url = f"https://search.naver.com/search.naver?where=news&query={urllib.parse.quote(title)}"
+        r = requests.get(search_url, timeout=3)
+        # 네이버가 미리 긁어온 썸네일 이미지 주소 추출
+        img_match = re.search(r'data-src="([^"]+thumb[^"]+)"', r.text)
+        if img_match: return img_match.group(1)
+    except: pass
+    return ""
+
+# 4. DB 및 수집 엔진 (v28 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v28.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -107,9 +116,6 @@ def update_articles():
         ("game site:gamespot.com", "GameSpot", "tag-global", "global")
     ]
 
-    # 미디어 네임스페이스 등록 (A-썸네일 탈취 핵심)
-    media_ns = {'media': 'http://search.yahoo.com/mrss/'}
-
     for query, source_name, tag, group in rss_feeds:
         try:
             url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl={'en-US' if group=='global' else 'ko'}&gl={'US' if group=='global' else 'KR'}&ceid={'US:en' if group=='global' else 'KR:ko'}"
@@ -128,21 +134,9 @@ def update_articles():
                     final_title = translate_title(clean_title) if group == "global" else clean_title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # --- [철칙 2: A-썸네일 강화] 구글이 뚫어놓은 원본 썸네일 직접 낚시 ---
-                    thumb = ""
-                    # 1순위: media:content 태그 (구글 뉴스 썸네일 서버)
-                    media_content = item.find('media:content', media_ns)
-                    if media_content is not None:
-                        thumb = media_content.get('url')
-                    
-                    # 2순위: description 내부 <img> 태그 (인코딩된 데이터 활용)
-                    if not thumb:
-                        desc_text = item.find('description').text
-                        img_match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
-                        if img_match: thumb = img_match.group(1)
-                    
-                    # 3순위 폴백: 고해상도 로고
-                    if not thumb:
+                    # --- [철칙 2: A-사진 복구] 네이버 썸네일 백업 엔진 가동 ---
+                    thumb = get_naver_thumbnail(final_title)
+                    if not thumb: # 네이버에서 실패시 로고 폴백
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
                     
                     pub_node = item.find('pubDate')
@@ -169,13 +163,12 @@ mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
 # --- [철칙 3: B 보존] 화면 렌더링 (배너, 더보기, 레이아웃 100% 동일 유지) ---
-try: st.image("division8_centered_1800x300.png", use_column_width=True) # 배너 이미지
+try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
 def draw_box(col, header, data_list):
     with col:
-        # 더보기 버튼 (디자인 고정)
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
         for r in data_list[:8]:
@@ -198,7 +191,6 @@ def draw_box(col, header, data_list):
             </div>"""
         html += '</div>'; st.markdown(html, unsafe_allow_html=True)
 
-# 2단 6분할 레이아웃 유지
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체/웹진", dom)
 draw_box(r1_c2, "글로벌 트렌드", glo)
@@ -213,7 +205,6 @@ draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
 
-# 하단 3단 랭킹 구조 유지
 b1, b2, b3 = st.columns(3)
 def draw_rank(col, header, data_list, color):
     with col:
@@ -229,4 +220,4 @@ draw_rank(b1, "많이 읽은 뉴스", mixed[24:39] if len(mixed) > 24 else mixed
 draw_rank(b2, "실시간 여론 집중", sorted(mixed, key=lambda x: len(x['title']), reverse=True), "red")
 draw_rank(b3, "화제의 키워드", sorted(mixed, key=lambda x: x['source']), "green")
 
-st.markdown('<div class="version-marker">v65.0 (A-RSS Media DeepFetch & B-Layout Frozen)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v66.0 (A-Naver Proxy Thumbnails & B-Frozen Design)</div>', unsafe_allow_html=True)
