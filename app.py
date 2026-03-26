@@ -62,28 +62,27 @@ def is_similar_title(new_title, existing_titles, threshold=0.65):
             return True
     return False
 
-# --- [철칙 4: 반복 실수 차단] 날짜 강제 교정 (3828일 전 방지) ---
+# --- [철칙 4: 반복 실수 차단] 날짜 물리적 고정 유지 ---
 def get_safe_timestamp(pub_date_str):
     now = datetime.now().timestamp()
     try:
         ts = parsedate_to_datetime(pub_date_str).timestamp()
-        # 1년 이상 차이나는 데이터(오류)는 현재 시간으로 강제 치환
-        if abs(now - ts) > 31536000: return now
+        if abs(now - ts) > 31536000: return now # 1년 이상 오류 데이터 강제 현재화
         return ts
     except:
         return now
 
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
-    if diff < 0 or diff > 31536000: return "방금 전" # 3828일 전 같은 수치 물리적 차단
+    if diff < 0 or diff > 31536000: return "방금 전"
     if diff < 86400:
         if diff >= 3600: return f"{int(diff // 3600)}시간 전"
         if diff >= 60: return f"{int(diff // 60)}분 전"
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v40 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v40.json"
+# 4. DB 및 수집 엔진 (v41 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v41.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -112,7 +111,7 @@ def update_articles():
         try:
             r = requests.get(rss_url, timeout=5)
             root = ET.fromstring(r.text)
-            for item in root.findall('.//item')[:10]:
+            for item in root.findall('.//item')[:15]:
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
@@ -125,20 +124,16 @@ def update_articles():
                     desc_node = item.find('description')
                     desc_text = desc_node.text if desc_node is not None else ""
                     
-                    # [A-사진 핀셋 복구 전략]
-                    if mode == "direct" or mode == "google_cache":
-                        # 1순위: 캐시 추출
-                        match = re.search(r'src="([^"]+)"', desc_text)
-                        if match: thumb = match.group(1)
-                        # 2순위: 원본 태그
-                        if not thumb:
-                            media = item.find('{http://search.yahoo.com/mrss/}content')
-                            if media is not None: thumb = media.get('url')
+                    # [A-사진 추출]
+                    match = re.search(r'src="([^"]+)"', desc_text)
+                    if match: thumb = match.group(1)
+                    if not thumb:
+                        media = item.find('{http://search.yahoo.com/mrss/}content')
+                        if media is not None: thumb = media.get('url')
 
                     if not thumb:
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
-                    # [루리웹 날짜 버그 박멸] 강제 교정 적용
                     pub_node = item.find('pubDate')
                     timestamp = get_safe_timestamp(pub_node.text) if pub_node is not None else datetime.now().timestamp()
                     
@@ -151,7 +146,22 @@ def update_articles():
                 except: pass
         except: pass
 
-    final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
+    # --- [A-데이터 정제] 매체 믹싱 로직 ---
+    final_raw = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
+    
+    # 믹싱 처리: 같은 소스가 너무 연속되지 않게 섞음
+    mixed_list = []
+    source_counts = {}
+    for item in final_raw:
+        s = item['source']
+        if source_counts.get(s, 0) < 3: # 한 소스당 상위 3개씩만 우선 배치
+            mixed_list.append(item)
+            source_counts[s] = source_counts.get(s, 0) + 1
+    
+    # 나머지 데이터 채우기
+    remaining = [x for x in final_raw if x not in mixed_list]
+    final_db = mixed_list + remaining
+    
     save_db(final_db[:300])
     return final_db
 
@@ -161,7 +171,7 @@ glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 mixed = [d for d in live_data if d['group'] in ["domestic", "global"]]
 
-# --- [철칙 3: B 보존] 화면 렌더링 (배너, 더보기, 레이아웃 100% 동일 유지) ---
+# --- [철칙 3: B 보존] 화면 렌더링 (디자인 고정) ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -170,9 +180,12 @@ def draw_box(col, header, data_list):
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html = '<div class="custom-box">'
-        for r in data_list[:8]:
+        # [A-정렬 최적화] 사진 있는 기사를 리스트 상단으로 우선 끌어올림
+        sorted_list = sorted(data_list[:12], key=lambda x: ("data:image" in x['thumb'] or "http" in x['thumb']) and "favicon" not in x['thumb'], reverse=True)
+        
+        for r in sorted_list[:8]:
             fallback = f"https://www.google.com/s2/favicons?domain={r['source']}.com&sz=128"
-            thumb = r.get("thumb") if r.get("thumb") else fallback
+            thumb = r['thumb'] if r['thumb'] else fallback
             region = "KR" if r['group'] != "global" else "GL"
             reg_cls = "tag-kr" if r['group'] != "global" else "tag-gl"
             html += f"""
@@ -194,12 +207,12 @@ draw_box(r1_c1, "국내 주요 매체/웹진", dom)
 draw_box(r1_c2, "글로벌 트렌드", glo)
 
 r2_c1, r2_c2 = st.columns(2)
-draw_box(r2_c1, "국내 핫 이슈", dom[8:16] if len(dom) > 8 else dom)
-draw_box(r2_c2, "글로벌 핫 이슈", glo[8:16] if len(glo) > 8 else glo)
+draw_box(r2_c1, "국내 핫 이슈", dom[8:20])
+draw_box(r2_c2, "글로벌 핫 이슈", glo[8:20])
 
 r3_c1, r3_c2 = st.columns(2)
-draw_box(r3_c1, "전체 최신 기사", mixed[16:24] if len(mixed) > 16 else mixed)
+draw_box(r3_c1, "전체 최신 기사", mixed[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v78.0 (Physical Date Correction & Layout Frozen)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v79.0 (Source Mixing & Photo Priority & Layout Locked)</div>', unsafe_allow_html=True)
