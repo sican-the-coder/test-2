@@ -5,7 +5,7 @@ import re
 import json
 import os
 import urllib.parse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
@@ -62,32 +62,28 @@ def is_similar_title(new_title, existing_titles, threshold=0.65):
             return True
     return False
 
-# --- [철칙 4: 반복 실수 차단] 날짜 물리적 교정 로직 ---
+# --- [철칙 4: 반복 실수 차단] 날짜 강제 교정 (3828일 전 방지) ---
 def get_safe_timestamp(pub_date_str):
+    now = datetime.now().timestamp()
     try:
-        # 1순위: 표준 파싱
-        return parsedate_to_datetime(pub_date_str).timestamp()
+        ts = parsedate_to_datetime(pub_date_str).timestamp()
+        # 1년 이상 차이나는 데이터(오류)는 현재 시간으로 강제 치환
+        if abs(now - ts) > 31536000: return now
+        return ts
     except:
-        try:
-            # 2순위: 루리웹형 비표준 포맷 (2026-03-26 14:00:00) 낚아채기
-            match = re.search(r'(\d{4})-(\d{2})-(\d{2})', pub_date_str)
-            if match:
-                y, m, d = map(int, match.groups())
-                return datetime(y, m, d, tzinfo=timezone.utc).timestamp()
-        except: pass
-    return datetime.now(timezone.utc).timestamp()
+        return now
 
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
-    if diff < 0: return "방금 전"
+    if diff < 0 or diff > 31536000: return "방금 전" # 3828일 전 같은 수치 물리적 차단
     if diff < 86400:
         if diff >= 3600: return f"{int(diff // 3600)}시간 전"
         if diff >= 60: return f"{int(diff // 60)}분 전"
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v39 갱신 및 B-디자인 철저 보호)
-DB_FILE = "aagig_db_v39.json"
+# 4. DB 및 수집 엔진 (v40 갱신 및 B-디자인 철저 보호)
+DB_FILE = "aagig_db_v40.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -104,7 +100,6 @@ def update_articles():
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
 
-    # 수집 경로 최적화 (국내 매체는 구글 캐시 병행)
     feeds = [
         ("https://www.inven.co.kr/rss/news/", "인벤", "tag-inven", "domestic", "direct"),
         ("https://feeds.feedburner.com/ruliweb", "루리웹", "tag-ruli", "domestic", "direct"),
@@ -130,28 +125,20 @@ def update_articles():
                     desc_node = item.find('description')
                     desc_text = desc_node.text if desc_node is not None else ""
                     
-                    # [A-사진 추출 로직 고도화]
-                    if mode == "direct":
-                        # 인벤/글로벌: 원본 태그 탐색
-                        media = item.find('{http://search.yahoo.com/mrss/}content')
-                        if media is not None: thumb = media.get('url')
+                    # [A-사진 핀셋 복구 전략]
+                    if mode == "direct" or mode == "google_cache":
+                        # 1순위: 캐시 추출
+                        match = re.search(r'src="([^"]+)"', desc_text)
+                        if match: thumb = match.group(1)
+                        # 2순위: 원본 태그
                         if not thumb:
-                            enc = item.find('enclosure')
-                            if enc is not None: thumb = enc.get('url')
-                        if not thumb and desc_text:
-                            match = re.search(r'<img[^>]+src="([^"]+)"', desc_text)
-                            if match: thumb = match.group(1)
-                    
-                    # 실패 시 혹은 구글 모드일 때: 정적 캐시 낚아채기
-                    if not thumb or mode == "google_cache":
-                        if desc_text:
-                            match = re.search(r'src="([^"]+)"', desc_text)
-                            if match: thumb = match.group(1)
+                            media = item.find('{http://search.yahoo.com/mrss/}content')
+                            if media is not None: thumb = media.get('url')
 
                     if not thumb:
                         thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
-                    # [루리웹 날짜 버그 박멸] 물리적 파싱 적용
+                    # [루리웹 날짜 버그 박멸] 강제 교정 적용
                     pub_node = item.find('pubDate')
                     timestamp = get_safe_timestamp(pub_node.text) if pub_node is not None else datetime.now().timestamp()
                     
@@ -215,4 +202,4 @@ draw_box(r3_c1, "전체 최신 기사", mixed[16:24] if len(mixed) > 16 else mix
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v77.0 (Date Bug Fixed & Domestic Image Recovery)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v78.0 (Physical Date Correction & Layout Frozen)</div>', unsafe_allow_html=True)
