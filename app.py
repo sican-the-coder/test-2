@@ -93,8 +93,22 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v50: 썸네일 캐시 초기화)
-DB_FILE = "aagig_db_v50.json"
+# [신규 수술] 오픈 그래프(og:image) 썸네일 구조대
+def fetch_og_image(url):
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        # 1.5초 룰: 화이트아웃 절대 방지
+        r = requests.get(url, headers=headers, timeout=1.5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        og_img = soup.find('meta', property='og:image')
+        if og_img and og_img.get('content'):
+            return og_img['content']
+    except:
+        pass
+    return None
+
+# 4. DB 및 수집 엔진 (v51: 썸네일 캐시 초기화)
+DB_FILE = "aagig_db_v51.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -116,7 +130,6 @@ def update_articles():
     }
 
     # --- [1] 안전한 RSS 구역 ---
-    # 수술 1: 네이버 공식 뉴스 RSS 직행 (구글 썸네일 누락 해결)
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15),
@@ -147,6 +160,12 @@ def update_articles():
                         if desc is not None:
                             match = re.search(r'src="([^"]+)"', desc.text)
                             if match: thumb = match.group(1)
+                            
+                    # [구조대 투입] 썸네일을 못 찾았다면 기사 원본에서 og:image 파싱
+                    if not thumb:
+                        og = fetch_og_image(link)
+                        if og: thumb = og
+                            
                     if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
                     pub_node = item.find('pubDate')
@@ -162,7 +181,6 @@ def update_articles():
         except: pass
 
     # --- [2] 14개 정예 링크 맞춤형 휴리스틱 스크래핑 구역 ---
-    # 수술 2: 루리웹 끝에 갤러리 뷰(&view=gallery) 복구
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -210,7 +228,6 @@ def update_articles():
                 if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
                 if is_similar_title(title, existing_titles): continue
 
-                # 수술 3: 지연 로딩 비밀 주머니(data-original 등)까지 샅샅이 뒤지는 썸네일 추적기
                 thumb = ""
                 img = container.find('img')
                 if img:
@@ -221,6 +238,12 @@ def update_articles():
                             break
                     if thumb and not thumb.startswith('http'):
                         thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
+                
+                # [구조대 투입] 썸네일을 못 찾았다면 기사 원본에서 og:image 파싱
+                if not thumb:
+                    og = fetch_og_image(link)
+                    if og: thumb = og
+                        
                 if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
                 
                 container_text = container.get_text(separator=' ')
@@ -240,7 +263,7 @@ def update_articles():
     return final_db
 
 # [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('14개 정예 웹진에 접속하여 데이터를 직접 수집 중입니다. (최대 10초 소요)'):
+with st.spinner('14개 정예 웹진에 접속하여 썸네일과 기사 데이터를 수집 중입니다. (최대 15초 소요)'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -286,4 +309,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v108.0 (Thumbnail Master Restored)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v109.0 (OG Image Rescuer & Layout Defender Active)</div>', unsafe_allow_html=True)
