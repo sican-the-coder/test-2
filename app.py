@@ -77,7 +77,7 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# [담당자님 지시: 시간 번역기 100% 동결]
+# [시간 번역기 100% 동결]
 def extract_time_from_text(text):
     now = datetime.now()
     match = re.search(r'(202[0-9])[.-](0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
@@ -94,8 +94,8 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v53: 최신 기사 복구 및 마켓 캐시 초기화)
-DB_FILE = "aagig_db_v53.json"
+# 4. DB 및 수집 엔진 (v54: 썸네일 전면 복구 및 방금 전 도배 캐시 초기화)
+DB_FILE = "aagig_db_v54.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -116,11 +116,10 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 ---
+    # --- [1] 안전한 RSS 구역 (네이버는 직접 스크래핑으로 이동) ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
-        ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15),
-        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", 3)
+        ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15)
     ]
     
     for rss_url, source_name, tag, group, cap in rss_feeds:
@@ -152,14 +151,8 @@ def update_articles():
 
                     pub_node = item.find('pubDate')
                     if pub_node is not None:
+                        # [방금전 도배 해결] 원래 시간 그대로 가져오고, 미래 시간 강제 덮어쓰기 로직 삭제
                         timestamp = parsedate_to_datetime(pub_node.text).timestamp()
-                        
-                        # [수술 3: 글로벌(GameSpot) 시차 동기화 방어망]
-                        if source_name == "GameSpot":
-                            now_ts = datetime.now().timestamp()
-                            # 미래 시간으로 찍히거나 KST 미반영 시 현재 시간으로 교정하여 당일 기사 누락 방지
-                            if timestamp > now_ts: 
-                                timestamp = now_ts
                     else:
                         timestamp = datetime.now().timestamp()
                         
@@ -173,8 +166,9 @@ def update_articles():
                 existing_titles.append(art['title'])
         except: pass
 
-    # --- [2] 14개 정예 링크 맞춤형 휴리스틱 스크래핑 구역 ---
+    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 (네이버 추가) ---
     html_targets = [
+        ("https://search.naver.com/search.naver?where=news&query=게임", "네이버", "tag-biz"),
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400005&categoryId=0", "TIG", "tag-kr"),
@@ -188,7 +182,6 @@ def update_articles():
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    # [수술 2: 쇼핑몰/이벤트 블랙리스트 강력 추가]
     blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '할인', '특가', '이벤트', '인벤마트', '마켓', '핫딜']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '출시', '업데이트', 'RPG', 'MMO']
 
@@ -199,10 +192,10 @@ def update_articles():
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
-                # [수술 1: 멍청한 차단망 철거 & 상단 고정 공지/광고 핀셋 스킵]
+                # 사이드바 락온 (유지)
                 container_classes = " ".join(container.get('class', [])).lower()
-                if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']):
-                    continue
+                if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']): continue
+                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)): continue
                     
                 text_len = len(container.get_text(strip=True))
                 if text_len < 20 or text_len > 400: continue
@@ -227,22 +220,38 @@ def update_articles():
                 if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
                 if is_similar_title(title, existing_titles): continue
 
+                # [가장 핵심: 1:1 매체별 썸네일 스나이퍼 독립 구역]
                 thumb = ""
-                img = container.find('img')
+                img = None
+                
+                if source == "TIG":
+                    img = container.select_one('.news-list-img img, .thumb img')
+                elif source == "인벤":
+                    img = container.select_one('.thumb img, .name img')
+                elif source == "루리웹":
+                    img = container.select_one('a.deco img')
+                elif source == "게임메카":
+                    img = container.select_one('.list_img img, .thumb img')
+                elif source == "네이버":
+                    img = container.select_one('.dsc_thumb img')
+                else:
+                    img = container.find('img')
+                
                 if img:
-                    for attr in ['data-original', 'data-src', 'data-lazy-src', 'src']:
+                    for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
                         val = img.get(attr)
-                        if val and not val.startswith('data:image') and "blank" not in val and "icon" not in val.lower():
+                        # 망가졌던 원인인 공용 icon 필터 완전 삭제
+                        if val and not val.startswith('data:image'):
                             thumb = val
                             break
-                    if thumb and not thumb.startswith('http'):
-                        thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
+                            
+                if thumb and not thumb.startswith('http'):
+                    thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
                 
                 if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
                 
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
-                
                 if not ts: ts = datetime.now().timestamp()
                 
                 new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": ts})
@@ -250,7 +259,10 @@ def update_articles():
                 existing_titles.append(title)
                 
                 count += 1
-                if count >= 5: break 
+                if source == "네이버":
+                    if count >= 3: break # 네이버는 할당량 3개
+                else:
+                    if count >= 5: break 
         except: pass
 
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
@@ -258,7 +270,7 @@ def update_articles():
     return final_db
 
 # [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('14개 정예 웹진에서 최신 기사를 수집 중입니다. (최대 10초 소요)'):
+with st.spinner('1:1 스나이퍼를 통해 썸네일과 최신 기사를 수집 중입니다...'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -304,4 +316,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v111.0 (Latest Articles Saved & Ad/Notice Blocked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v112.0 (1:1 Custom Sniper & Naver Direct & GameSpot Fix)</div>', unsafe_allow_html=True)
