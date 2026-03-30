@@ -5,7 +5,7 @@ import re
 import json
 import os
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 import difflib
@@ -65,21 +65,41 @@ def translate_title(text):
 
 def is_similar_title(new_title, existing_titles, threshold=0.65):
     for ext_title in existing_titles:
-        if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold:
-            return True
+        if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold: return True
     return False
 
 def get_relative_time(timestamp):
     diff = datetime.now().timestamp() - timestamp
-    if diff < 0 or diff > 31536000: return "방금 전"
+    if diff < 0: return "방금 전"
     if diff < 86400:
         if diff >= 3600: return f"{int(diff // 3600)}시간 전"
         if diff >= 60: return f"{int(diff // 60)}분 전"
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# 4. DB 및 수집 엔진 (v48: 캐시 초기화)
-DB_FILE = "aagig_db_v48.json"
+# [핵심 수술 1] 텍스트 기반 시간 역산기
+def extract_time_from_text(text):
+    now = datetime.now()
+    # 1. YYYY.MM.DD 형식
+    match = re.search(r'(202[0-9])[.-](0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
+    if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
+    # 2. MM.DD 형식
+    match = re.search(r'(0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
+    if match: return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
+    # 3. N시간 전, N분 전, N일 전 형식
+    match = re.search(r'(\d+)\s*(시간|분|일)\s*전', text)
+    if match:
+        val, unit = int(match.group(1)), match.group(2)
+        if unit == '시간': return (now - timedelta(hours=val)).timestamp()
+        if unit == '분': return (now - timedelta(minutes=val)).timestamp()
+        if unit == '일': return (now - timedelta(days=val)).timestamp()
+    # 4. HH:MM (오늘 작성된 기사)
+    match = re.search(r'([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
+    if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
+    return None
+
+# 4. DB 및 수집 엔진 (v49: 캐시 초기화)
+DB_FILE = "aagig_db_v49.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -100,7 +120,7 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 (글로벌, MTN, 네이버) ---
+    # --- [1] 안전한 RSS 구역 (글로벌, MTN, 네이버 유지) ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15),
@@ -120,7 +140,6 @@ def update_articles():
                     final_title = translate_title(title) if group == "global" else title
                     if is_similar_title(final_title, existing_titles): continue
                     
-                    # 썸네일 수집 로직 (GameSpot 등)
                     thumb = ""
                     media = item.find('{http://search.yahoo.com/mrss/}content')
                     if media is not None: thumb = media.get('url')
@@ -132,20 +151,21 @@ def update_articles():
                         if desc is not None:
                             match = re.search(r'src="([^"]+)"', desc.text)
                             if match: thumb = match.group(1)
-                    if not thumb:
-                        thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
+                    if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
-                    timestamp = datetime.now().timestamp() # RSS는 시간순서대로 정렬됨
+                    pub_node = item.find('pubDate')
+                    timestamp = parsedate_to_datetime(pub_node.text).timestamp() if pub_node is not None else datetime.now().timestamp()
                     feed_temp.append({"title": final_title, "link": link, "source": source_name, "tag": tag, "group": group, "thumb": thumb, "timestamp": timestamp})
                 except: pass
             
+            feed_temp.sort(key=lambda x: x['timestamp'], reverse=True)
             for art in feed_temp[:cap]:
                 new_articles.append(art)
                 existing_links.add(art['link'])
                 existing_titles.append(art['title'])
         except: pass
 
-    # --- [2] 14개 정예 링크 직접 스크래핑 구역 (꼼수 폐기) ---
+    # --- [2] 14개 정예 링크 맞춤형 휴리스틱 스크래핑 구역 ---
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -160,45 +180,65 @@ def update_articles():
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    # 만화/서적 등 스팸 필터 유지
-    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적']
+    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고']
+    # [핵심 수술 2] 경제지 스팸 방어용 게임 전용 화이트리스트
+    game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '출시', '업데이트', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
         try:
-            # 3초 룰 적용하여 서버 뻗음 방지
-            r = requests.get(url, headers=headers, timeout=3)
+            r = requests.get(url, headers=headers, timeout=5)
             soup = BeautifulSoup(r.text, 'html.parser')
             count = 0
             
-            # 범용적이고 안전한 썸네일+기사 추출 휴리스틱
-            for a_tag in soup.find_all('a', href=True):
-                if count >= 3: break # 각 세부 링크당 3개씩만 가져와서 황금비율 유지
+            # [핵심 수술 1] 박스(컨테이너) 단위 정밀 스크래핑
+            for container in soup.find_all(['li', 'tr', 'div']):
+                text_len = len(container.get_text(strip=True))
+                # 너무 작거나(단순 링크), 너무 큰(전체 페이지) 박스 제외
+                if text_len < 20 or text_len > 400: continue
                 
-                title = a_tag.get_text(strip=True)
-                if len(title) < 12 or any(b in title for b in blacklist): continue # 짧은 UI 텍스트 및 스팸 무시
+                a_tags = container.find_all('a', href=True)
+                if not a_tags: continue
                 
-                link = a_tag['href']
-                if not link.startswith('http'):
-                    base = urllib.parse.urlparse(url)
-                    link = f"{base.scheme}://{base.netloc}{link}"
+                main_a = None
+                title = ""
+                # 가장 텍스트가 긴 a태그를 기사 제목으로 간주
+                for a in a_tags:
+                    t = a.get_text(strip=True)
+                    if len(t) > max(len(title), 12):
+                        title = t
+                        main_a = a
                 
-                if link in existing_links or is_similar_title(title, existing_titles): continue
+                if not main_a: continue
+                
+                link = main_a['href']
+                if not link.startswith('http'): link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
+                if link in existing_links or "javascript:" in link: continue
+                if any(b in title for b in blacklist): continue
+                
+                # FETV/딜사이트는 게임 키워드가 없으면 이마트/삼성 기사로 간주하고 버림
+                if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
+                if is_similar_title(title, existing_titles): continue
 
-                # 썸네일 찾기 (a 태그 내부 이미지 우선)
-                img_tag = a_tag.find('img')
-                if img_tag and img_tag.has_attr('src'):
-                    thumb = img_tag['src']
-                    if not thumb.startswith('http'):
+                # 썸네일 매칭 (같은 박스 안에서만 검색)
+                thumb = ""
+                img = container.find('img')
+                if img:
+                    thumb = img.get('src', '') or img.get('data-src', '')
+                    if thumb and not thumb.startswith('http'):
                         thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
-                else:
-                    thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
-
-                timestamp = datetime.now().timestamp()
-                new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": timestamp})
+                if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
                 
+                # 시간 역산기 작동
+                container_text = container.get_text(separator=' ')
+                ts = extract_time_from_text(container_text)
+                if not ts: ts = datetime.now().timestamp() - 7200 # 아예 안 잡히면 2시간 전으로 밀어버림 (방금전 도배 방지)
+                
+                new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": ts})
                 existing_links.add(link)
                 existing_titles.append(title)
+                
                 count += 1
+                if count >= 5: break # 각 URL당 최대 5개씩만 엄선 (도배 방지)
         except: pass
 
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
@@ -213,7 +253,7 @@ dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 
-# --- 6분할 레이아웃 출력 (html.escape 추가로 양식 깨짐 방벽 전개) ---
+# --- 6분할 레이아웃 출력 (양식 깨짐 방벽 html.escape 유지) ---
 def draw_box(col, header, data_list):
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
@@ -223,8 +263,6 @@ def draw_box(col, header, data_list):
             thumb = r['thumb'] if r['thumb'] else fallback
             region = "KR" if r['group'] != "global" else "GL"
             reg_cls = "tag-kr" if r['group'] != "global" else "tag-gl"
-            
-            # [핵심] 제목의 <, >, " 특수문자가 HTML을 부수지 못하도록 이스케이프 처리
             safe_title = html.escape(r['title'])
             
             html_str += f"""
@@ -254,4 +292,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v106.0 (Direct BS4 Scraper & Layout Protector Active)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v107.0 (Heuristic Parser & Time Restorer Active)</div>', unsafe_allow_html=True)
