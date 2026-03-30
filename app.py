@@ -50,7 +50,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- [UI 선출력] 배너와 타이틀을 먼저 그려서 백지화 방지 ---
+# --- [UI 선출력] 배너와 타이틀 ---
 try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
@@ -77,6 +77,7 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
+# [담당자님 지시: 시간 번역기 100% 동결]
 def extract_time_from_text(text):
     now = datetime.now()
     match = re.search(r'(202[0-9])[.-](0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
@@ -93,22 +94,8 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# [신규 수술] 오픈 그래프(og:image) 썸네일 구조대
-def fetch_og_image(url):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        # 1.5초 룰: 화이트아웃 절대 방지
-        r = requests.get(url, headers=headers, timeout=1.5)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        og_img = soup.find('meta', property='og:image')
-        if og_img and og_img.get('content'):
-            return og_img['content']
-    except:
-        pass
-    return None
-
-# 4. DB 및 수집 엔진 (v51: 썸네일 캐시 초기화)
-DB_FILE = "aagig_db_v51.json"
+# 4. DB 및 수집 엔진 (v52: 캐시 초기화)
+DB_FILE = "aagig_db_v52.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -129,11 +116,11 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 ---
+    # --- [1] 안전한 RSS 구역 (네이버 구글 우회 복구) ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15),
-        ("https://newssearch.naver.com/search.naver?where=rss&query=게임", "네이버", "tag-biz", "domestic", 3)
+        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", 3)
     ]
     
     for rss_url, source_name, tag, group, cap in rss_feeds:
@@ -160,11 +147,6 @@ def update_articles():
                         if desc is not None:
                             match = re.search(r'src="([^"]+)"', desc.text)
                             if match: thumb = match.group(1)
-                            
-                    # [구조대 투입] 썸네일을 못 찾았다면 기사 원본에서 og:image 파싱
-                    if not thumb:
-                        og = fetch_og_image(link)
-                        if og: thumb = og
                             
                     if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
@@ -205,6 +187,11 @@ def update_articles():
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
+                # [수술 2: 사이드바 원천 차단 락온] 부모 태그에 side, best, rank 등이 있으면 무조건 기각
+                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or \
+                   container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)):
+                    continue
+                    
                 text_len = len(container.get_text(strip=True))
                 if text_len < 20 or text_len > 400: continue
                 
@@ -233,22 +220,20 @@ def update_articles():
                 if img:
                     for attr in ['data-original', 'data-src', 'data-lazy-src', 'src']:
                         val = img.get(attr)
-                        if val and not val.startswith('data:image') and "blank" not in val:
+                        # 아이콘이나 가짜 투명 이미지 철저히 배제
+                        if val and not val.startswith('data:image') and "blank" not in val and "icon" not in val.lower():
                             thumb = val
                             break
                     if thumb and not thumb.startswith('http'):
                         thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
                 
-                # [구조대 투입] 썸네일을 못 찾았다면 기사 원본에서 og:image 파싱
-                if not thumb:
-                    og = fetch_og_image(link)
-                    if og: thumb = og
-                        
                 if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
                 
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
-                if not ts: ts = datetime.now().timestamp() - 7200
+                
+                # [수술 1: 강제 좌천 페널티 삭제] 시간을 못 찾았으면 현재 수집된 시간으로 인정하여 최상단 노출
+                if not ts: ts = datetime.now().timestamp()
                 
                 new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": ts})
                 existing_links.add(link)
@@ -263,7 +248,7 @@ def update_articles():
     return final_db
 
 # [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('14개 정예 웹진에 접속하여 썸네일과 기사 데이터를 수집 중입니다. (최대 15초 소요)'):
+with st.spinner('14개 정예 웹진에서 최신 기사를 수집 중입니다. (최대 10초 소요)'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -309,4 +294,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v109.0 (OG Image Rescuer & Layout Defender Active)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v110.0 (Time Preserved & Sidebar Blocked)</div>', unsafe_allow_html=True)
