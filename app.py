@@ -55,7 +55,7 @@ try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
-# 3. 보조 로직
+# 3. 보조 로직 (동결)
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
     if HAS_TRANSLATOR:
@@ -77,29 +77,24 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# [핵심 수술 1] 텍스트 기반 시간 역산기
 def extract_time_from_text(text):
     now = datetime.now()
-    # 1. YYYY.MM.DD 형식
     match = re.search(r'(202[0-9])[.-](0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
     if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
-    # 2. MM.DD 형식
     match = re.search(r'(0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
     if match: return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
-    # 3. N시간 전, N분 전, N일 전 형식
     match = re.search(r'(\d+)\s*(시간|분|일)\s*전', text)
     if match:
         val, unit = int(match.group(1)), match.group(2)
         if unit == '시간': return (now - timedelta(hours=val)).timestamp()
         if unit == '분': return (now - timedelta(minutes=val)).timestamp()
         if unit == '일': return (now - timedelta(days=val)).timestamp()
-    # 4. HH:MM (오늘 작성된 기사)
     match = re.search(r'([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v49: 캐시 초기화)
-DB_FILE = "aagig_db_v49.json"
+# 4. DB 및 수집 엔진 (v50: 썸네일 캐시 초기화)
+DB_FILE = "aagig_db_v50.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -120,11 +115,12 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 (글로벌, MTN, 네이버 유지) ---
+    # --- [1] 안전한 RSS 구역 ---
+    # 수술 1: 네이버 공식 뉴스 RSS 직행 (구글 썸네일 누락 해결)
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15),
-        ("https://news.google.com/rss/search?q=게임&hl=ko&gl=KR&ceid=KR:ko", "네이버", "tag-biz", "domestic", 3)
+        ("https://newssearch.naver.com/search.naver?where=rss&query=게임", "네이버", "tag-biz", "domestic", 3)
     ]
     
     for rss_url, source_name, tag, group, cap in rss_feeds:
@@ -166,6 +162,7 @@ def update_articles():
         except: pass
 
     # --- [2] 14개 정예 링크 맞춤형 휴리스틱 스크래핑 구역 ---
+    # 수술 2: 루리웹 끝에 갤러리 뷰(&view=gallery) 복구
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -176,12 +173,11 @@ def update_articles():
         ("https://www.gamemeca.com/feature.php", "게임메카", "tag-kr"),
         ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"),
         ("https://dealsite.co.kr/search/?LIKE=%EB%84%A5%EC%8A%A8&SEARCHFIELD=TITLE_CONTENT", "딜사이트", "tag-biz"),
-        ("https://bbs.ruliweb.com/news/board/11?cate=1035,1037,1039", "루리웹", "tag-kr"),
+        ("https://bbs.ruliweb.com/news/board/11?cate=1035,1037,1039&view=gallery", "루리웹", "tag-kr"),
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
     blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고']
-    # [핵심 수술 2] 경제지 스팸 방어용 게임 전용 화이트리스트
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '출시', '업데이트', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
@@ -190,10 +186,8 @@ def update_articles():
             soup = BeautifulSoup(r.text, 'html.parser')
             count = 0
             
-            # [핵심 수술 1] 박스(컨테이너) 단위 정밀 스크래핑
             for container in soup.find_all(['li', 'tr', 'div']):
                 text_len = len(container.get_text(strip=True))
-                # 너무 작거나(단순 링크), 너무 큰(전체 페이지) 박스 제외
                 if text_len < 20 or text_len > 400: continue
                 
                 a_tags = container.find_all('a', href=True)
@@ -201,7 +195,6 @@ def update_articles():
                 
                 main_a = None
                 title = ""
-                # 가장 텍스트가 긴 a태그를 기사 제목으로 간주
                 for a in a_tags:
                     t = a.get_text(strip=True)
                     if len(t) > max(len(title), 12):
@@ -214,31 +207,32 @@ def update_articles():
                 if not link.startswith('http'): link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
                 if link in existing_links or "javascript:" in link: continue
                 if any(b in title for b in blacklist): continue
-                
-                # FETV/딜사이트는 게임 키워드가 없으면 이마트/삼성 기사로 간주하고 버림
                 if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
                 if is_similar_title(title, existing_titles): continue
 
-                # 썸네일 매칭 (같은 박스 안에서만 검색)
+                # 수술 3: 지연 로딩 비밀 주머니(data-original 등)까지 샅샅이 뒤지는 썸네일 추적기
                 thumb = ""
                 img = container.find('img')
                 if img:
-                    thumb = img.get('src', '') or img.get('data-src', '')
+                    for attr in ['data-original', 'data-src', 'data-lazy-src', 'src']:
+                        val = img.get(attr)
+                        if val and not val.startswith('data:image') and "blank" not in val:
+                            thumb = val
+                            break
                     if thumb and not thumb.startswith('http'):
                         thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
                 if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
                 
-                # 시간 역산기 작동
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
-                if not ts: ts = datetime.now().timestamp() - 7200 # 아예 안 잡히면 2시간 전으로 밀어버림 (방금전 도배 방지)
+                if not ts: ts = datetime.now().timestamp() - 7200
                 
                 new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": ts})
                 existing_links.add(link)
                 existing_titles.append(title)
                 
                 count += 1
-                if count >= 5: break # 각 URL당 최대 5개씩만 엄선 (도배 방지)
+                if count >= 5: break 
         except: pass
 
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
@@ -292,4 +286,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v107.0 (Heuristic Parser & Time Restorer Active)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v108.0 (Thumbnail Master Restored)</div>', unsafe_allow_html=True)
