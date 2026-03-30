@@ -94,8 +94,8 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v52: 캐시 초기화)
-DB_FILE = "aagig_db_v52.json"
+# 4. DB 및 수집 엔진 (v53: 최신 기사 복구 및 마켓 캐시 초기화)
+DB_FILE = "aagig_db_v53.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -116,7 +116,7 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 (네이버 구글 우회 복구) ---
+    # --- [1] 안전한 RSS 구역 ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15),
@@ -151,7 +151,18 @@ def update_articles():
                     if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
                     pub_node = item.find('pubDate')
-                    timestamp = parsedate_to_datetime(pub_node.text).timestamp() if pub_node is not None else datetime.now().timestamp()
+                    if pub_node is not None:
+                        timestamp = parsedate_to_datetime(pub_node.text).timestamp()
+                        
+                        # [수술 3: 글로벌(GameSpot) 시차 동기화 방어망]
+                        if source_name == "GameSpot":
+                            now_ts = datetime.now().timestamp()
+                            # 미래 시간으로 찍히거나 KST 미반영 시 현재 시간으로 교정하여 당일 기사 누락 방지
+                            if timestamp > now_ts: 
+                                timestamp = now_ts
+                    else:
+                        timestamp = datetime.now().timestamp()
+                        
                     feed_temp.append({"title": final_title, "link": link, "source": source_name, "tag": tag, "group": group, "thumb": thumb, "timestamp": timestamp})
                 except: pass
             
@@ -177,7 +188,8 @@ def update_articles():
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고']
+    # [수술 2: 쇼핑몰/이벤트 블랙리스트 강력 추가]
+    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '할인', '특가', '이벤트', '인벤마트', '마켓', '핫딜']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '출시', '업데이트', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
@@ -187,9 +199,9 @@ def update_articles():
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
-                # [수술 2: 사이드바 원천 차단 락온] 부모 태그에 side, best, rank 등이 있으면 무조건 기각
-                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or \
-                   container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)):
+                # [수술 1: 멍청한 차단망 철거 & 상단 고정 공지/광고 핀셋 스킵]
+                container_classes = " ".join(container.get('class', [])).lower()
+                if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']):
                     continue
                     
                 text_len = len(container.get_text(strip=True))
@@ -220,7 +232,6 @@ def update_articles():
                 if img:
                     for attr in ['data-original', 'data-src', 'data-lazy-src', 'src']:
                         val = img.get(attr)
-                        # 아이콘이나 가짜 투명 이미지 철저히 배제
                         if val and not val.startswith('data:image') and "blank" not in val and "icon" not in val.lower():
                             thumb = val
                             break
@@ -232,7 +243,6 @@ def update_articles():
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
                 
-                # [수술 1: 강제 좌천 페널티 삭제] 시간을 못 찾았으면 현재 수집된 시간으로 인정하여 최상단 노출
                 if not ts: ts = datetime.now().timestamp()
                 
                 new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": ts})
@@ -294,4 +304,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v110.0 (Time Preserved & Sidebar Blocked)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v111.0 (Latest Articles Saved & Ad/Notice Blocked)</div>', unsafe_allow_html=True)
