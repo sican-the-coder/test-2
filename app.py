@@ -55,7 +55,7 @@ try: st.image("division8_centered_1800x300.png", use_column_width=True)
 except: pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
-# 3. 보조 로직 (100% 동결)
+# 3. 보조 로직 (동결)
 def translate_title(text):
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
     if HAS_TRANSLATOR:
@@ -94,8 +94,8 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v56: 딜사이트 제목 및 썸네일 스나이퍼 적용)
-DB_FILE = "aagig_db_v56.json"
+# 4. DB 및 수집 엔진 (v57: 딜사이트 제목 복원 및 UI 스팸 캐시 초기화)
+DB_FILE = "aagig_db_v57.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -165,7 +165,7 @@ def update_articles():
                 existing_titles.append(art['title'])
         except: pass
 
-    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 (수술 집도) ---
+    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 ---
     html_targets = [
         ("https://search.naver.com/search.naver?where=news&query=게임", "네이버", "tag-biz"),
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
@@ -184,8 +184,8 @@ def update_articles():
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    # [인벤 쇼핑몰/마켓 차단 블랙리스트 유지]
-    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고']
+    # [수술 2: 루리웹 메뉴 스팸을 막기 위한 블랙리스트 강화 ('게시판', '공지사항' 추가)]
+    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '게시판', '공지사항', '이용안내']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '출시', '업데이트', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
@@ -209,15 +209,25 @@ def update_articles():
                 main_a = None
                 title = ""
                 
-                # [수술 1: 딜사이트 전용 제목 스나이퍼] - 내용이 아닌 진짜 제목만 추출
+                # [수술 1 & 2: 딜사이트, 네이버 전용 락온 및 예비 로직 원천 차단]
                 if source == "딜사이트":
-                    title_tag = container.select_one('.sn_title a, .title a, h3 a')
+                    title_tag = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, .tit a, strong.tit a')
                     if title_tag:
                         title = title_tag.get_text(strip=True)
                         main_a = title_tag
+                    else:
+                        continue # 딜사이트는 제목 태그 못 찾으면 무조건 버림 (내용 출력 완벽 방지)
                 
-                # 딜사이트가 아니거나 제목을 못 찾았을 때만 기존 로직(가장 긴 텍스트) 실행
-                if not main_a:
+                elif source == "네이버":
+                    title_tag = container.select_one('a.news_tit, a.tit, .news_tit')
+                    if title_tag:
+                        title = title_tag.get_text(strip=True)
+                        main_a = title_tag
+                    else:
+                        continue # 네이버는 정식 뉴스 제목 태그 못 찾으면 무조건 버림 (UI 메뉴 스팸 방지)
+                
+                else:
+                    # 나머지 사이트들은 기존 정상 작동하던 로직(가장 긴 텍스트) 유지
                     for a in a_tags:
                         t = a.get_text(strip=True)
                         if len(t) > max(len(title), 12):
@@ -237,7 +247,7 @@ def update_articles():
                 if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
                 if is_similar_title(title, existing_titles): continue
 
-                # [수술 2: 1:1 매체별 썸네일 완전 독립 격리] - 무식한 전체 탐색 폐기
+                # [1:1 매체별 썸네일 완전 독립 격리 - 100% 동결]
                 thumb = ""
                 img = None
                 
@@ -246,13 +256,12 @@ def update_articles():
                 elif source == "루리웹": img = container.select_one('a.deco img, .img_wrapper img')
                 elif source == "게임메카": img = container.select_one('.list_img img, .thumb img')
                 elif source == "네이버": img = container.select_one('.dsc_thumb img')
-                elif source == "ZDNet": img = container.select_one('img') # ZDNet은 기본 이미지 태그 사용
+                elif source == "ZDNet": img = container.select_one('img') 
                 elif source == "딜사이트": img = container.select_one('.thumb img, .sn_img img')
                 elif source == "FETV": img = container.select_one('.thumb img, .img_wrap img')
                 else: img = container.find('img')
                 
                 if img:
-                    # 해당 스나이퍼가 찾은 특정 이미지의 속성만 뒤짐 (다른 이미지는 절대 건드리지 않음)
                     for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
                         val = img.get(attr)
                         if val and not val.startswith('data:image') and "blank" not in val.lower():
@@ -284,7 +293,7 @@ def update_articles():
     return final_db
 
 # [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('1:1 스나이퍼 락온 및 딜사이트 제목 교정 중입니다...'):
+with st.spinner('정밀 타겟팅으로 기사 데이터를 교정 중입니다...'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -330,4 +339,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v115.0 (Strict 1:1 Thumb Sniper & Dealsite Title Fix)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v116.0 (Dealsite Fix & UI Spam Blocked)</div>', unsafe_allow_html=True)
