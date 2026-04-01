@@ -94,8 +94,8 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v58: 금융 스팸 차단 및 썸네일 캐시 초기화)
-DB_FILE = "aagig_db_v58.json"
+# 4. DB 및 수집 엔진 (v59: 네이버 삭제 및 타겟 링크 100% 락온)
+DB_FILE = "aagig_db_v59.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -165,9 +165,8 @@ def update_articles():
                 existing_titles.append(art['title'])
         except: pass
 
-    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 ---
+    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 (수술: 네이버 삭제, 14개 링크 락온) ---
     html_targets = [
-        ("https://search.naver.com/search.naver?where=news&query=게임", "네이버", "tag-biz"),
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400005&categoryId=0", "TIG", "tag-kr"),
@@ -178,13 +177,13 @@ def update_articles():
         ("https://www.inven.co.kr/webzine/news/?sclass=25", "인벤", "tag-inven"),
         ("https://www.gamemeca.com/review.php", "게임메카", "tag-kr"),
         ("https://www.gamemeca.com/feature.php", "게임메카", "tag-kr"),
-        ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"),
+        ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"), # ZDNet page=2 완벽 삭제
         ("https://dealsite.co.kr/search/?LIKE=%EB%84%A5%EC%8A%A8&SEARCHFIELD=TITLE_CONTENT&sp=m1&ALSOLIKE=&NOTLIKE=&searchStartDt=&searchEndDt=", "딜사이트", "tag-biz"),
         ("https://bbs.ruliweb.com/news/board/11?cate=1035,1037,1039&view=gallery", "루리웹", "tag-kr"),
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    # [수술 1: 금융 스팸 원천 차단 블랙리스트 강화 & 화이트리스트 교정]
+    # [금융 스팸 원천 차단 블랙리스트 유지]
     blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '게시판', '공지사항', '이용안내', '증권', '펀드', '자산운용', '투자증권', 'ISA', '코스닥', '주식', '청약', '금리', '환율', '특징주']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '신작', '플레이', 'RPG', 'MMO']
 
@@ -209,7 +208,7 @@ def update_articles():
                 main_a = None
                 title = ""
                 
-                # 딜사이트, 네이버 전용 락온 (동결)
+                # 딜사이트 전용 락온 (동결 - 네이버는 타겟에서 삭제되었으므로 의미없음)
                 if source == "딜사이트":
                     title_tag = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, .tit a, strong.tit a')
                     if title_tag:
@@ -218,7 +217,7 @@ def update_articles():
                     else:
                         continue
                 
-                elif source == "네이버":
+                elif source == "네이버": # 기존 로직 유지만 함 (접근 안 함)
                     title_tag = container.select_one('a.news_tit, a.tit, .news_tit')
                     if title_tag:
                         title = title_tag.get_text(strip=True)
@@ -246,7 +245,7 @@ def update_articles():
                 if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
                 if is_similar_title(title, existing_titles): continue
 
-                # [수술 2: 1:1 매체별 썸네일 완전 격리 & 태그 스나이퍼 확장]
+                # [1:1 매체별 썸네일 격리 - 100% 동결]
                 thumb = ""
                 img = None
                 
@@ -292,7 +291,7 @@ def update_articles():
     return final_db
 
 # [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('금융 스팸을 차단하고 썸네일을 정밀 추출 중입니다...'):
+with st.spinner('허가된 14개 정예 링크에서만 기사를 수집 중입니다...'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -338,4 +337,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v117.0 (Finance Spam Blocked & Thumb Sniper Expanded)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v118.0 (Strict 14 Target Lock-in & Naver Purged)</div>', unsafe_allow_html=True)
