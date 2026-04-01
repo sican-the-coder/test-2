@@ -94,8 +94,8 @@ def extract_time_from_text(text):
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     return None
 
-# 4. DB 및 수집 엔진 (v55: 쇼핑몰 차단 및 새 링크 캐시 적용)
-DB_FILE = "aagig_db_v55.json"
+# 4. DB 및 수집 엔진 (v56: 딜사이트 제목 및 썸네일 스나이퍼 적용)
+DB_FILE = "aagig_db_v56.json"
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -116,7 +116,7 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 (동결) ---
+    # --- [1] 안전한 RSS 구역 (100% 동결) ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15)
@@ -165,10 +165,9 @@ def update_articles():
                 existing_titles.append(art['title'])
         except: pass
 
-    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 (담당자님 14개 링크 + 네이버 적용) ---
+    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 (수술 집도) ---
     html_targets = [
         ("https://search.naver.com/search.naver?where=news&query=게임", "네이버", "tag-biz"),
-        # 담당자님 제공 14개 정예 링크 (ZDNet page=2 제거 완료)
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400005&categoryId=0", "TIG", "tag-kr"),
@@ -179,12 +178,13 @@ def update_articles():
         ("https://www.inven.co.kr/webzine/news/?sclass=25", "인벤", "tag-inven"),
         ("https://www.gamemeca.com/review.php", "게임메카", "tag-kr"),
         ("https://www.gamemeca.com/feature.php", "게임메카", "tag-kr"),
-        ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"), # 수정 완료
+        ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"),
         ("https://dealsite.co.kr/search/?LIKE=%EB%84%A5%EC%8A%A8&SEARCHFIELD=TITLE_CONTENT&sp=m1&ALSOLIKE=&NOTLIKE=&searchStartDt=&searchEndDt=", "딜사이트", "tag-biz"),
         ("https://bbs.ruliweb.com/news/board/11?cate=1035,1037,1039&view=gallery", "루리웹", "tag-kr"),
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
+    # [인벤 쇼핑몰/마켓 차단 블랙리스트 유지]
     blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '출시', '업데이트', 'RPG', 'MMO']
 
@@ -195,7 +195,7 @@ def update_articles():
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
-                # 사이드바/상단공지 차단
+                # 사이드바/상단공지 차단 락온 (동결)
                 container_classes = " ".join(container.get('class', [])).lower()
                 if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']): continue
                 if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)): continue
@@ -208,18 +208,28 @@ def update_articles():
                 
                 main_a = None
                 title = ""
-                for a in a_tags:
-                    t = a.get_text(strip=True)
-                    if len(t) > max(len(title), 12):
-                        title = t
-                        main_a = a
+                
+                # [수술 1: 딜사이트 전용 제목 스나이퍼] - 내용이 아닌 진짜 제목만 추출
+                if source == "딜사이트":
+                    title_tag = container.select_one('.sn_title a, .title a, h3 a')
+                    if title_tag:
+                        title = title_tag.get_text(strip=True)
+                        main_a = title_tag
+                
+                # 딜사이트가 아니거나 제목을 못 찾았을 때만 기존 로직(가장 긴 텍스트) 실행
+                if not main_a:
+                    for a in a_tags:
+                        t = a.get_text(strip=True)
+                        if len(t) > max(len(title), 12):
+                            title = t
+                            main_a = a
                 
                 if not main_a: continue
                 
                 link = main_a['href']
                 if not link.startswith('http'): link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
                 
-                # [수술: URL 절대 검열 - 쇼핑몰/스토어 영구 차단]
+                # 쇼핑몰/스토어 영구 차단망 (동결)
                 if any(spam in link for spam in ['smartstore', 'market.inven', 'shopping']): continue
                 
                 if link in existing_links or "javascript:" in link: continue
@@ -227,7 +237,7 @@ def update_articles():
                 if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
                 if is_similar_title(title, existing_titles): continue
 
-                # [1:1 매체별 썸네일 스나이퍼 완전 독립 구역]
+                # [수술 2: 1:1 매체별 썸네일 완전 독립 격리] - 무식한 전체 탐색 폐기
                 thumb = ""
                 img = None
                 
@@ -236,12 +246,15 @@ def update_articles():
                 elif source == "루리웹": img = container.select_one('a.deco img, .img_wrapper img')
                 elif source == "게임메카": img = container.select_one('.list_img img, .thumb img')
                 elif source == "네이버": img = container.select_one('.dsc_thumb img')
+                elif source == "ZDNet": img = container.select_one('img') # ZDNet은 기본 이미지 태그 사용
+                elif source == "딜사이트": img = container.select_one('.thumb img, .sn_img img')
+                elif source == "FETV": img = container.select_one('.thumb img, .img_wrap img')
                 else: img = container.find('img')
                 
                 if img:
+                    # 해당 스나이퍼가 찾은 특정 이미지의 속성만 뒤짐 (다른 이미지는 절대 건드리지 않음)
                     for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
                         val = img.get(attr)
-                        # 망가졌던 원인인 공용 icon 필터 완전 삭제하여 TIG 보호
                         if val and not val.startswith('data:image') and "blank" not in val.lower():
                             thumb = val
                             break
@@ -271,7 +284,7 @@ def update_articles():
     return final_db
 
 # [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('14개 정예 타겟에서 쇼핑몰을 차단하고 진짜 기사만 수집 중입니다...'):
+with st.spinner('1:1 스나이퍼 락온 및 딜사이트 제목 교정 중입니다...'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -317,4 +330,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v113.0 (Target Updated & Shopping Links Banned)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v115.0 (Strict 1:1 Thumb Sniper & Dealsite Title Fix)</div>', unsafe_allow_html=True)
