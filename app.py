@@ -12,7 +12,16 @@ import difflib
 import html
 from bs4 import BeautifulSoup
 
-# --- [철칙 1: B 유지] 기존 번역 및 기본 설정 사수 ---
+# cloudscraper 추가 (Cloudflare 우회용)
+try:
+    import cloudscraper
+    scraper = cloudscraper.create_scraper()
+    HAS_CLOUDSCRAPER = True
+except ImportError:
+    HAS_CLOUDSCRAPER = False
+    scraper = None
+
+# 번역 라이브러리
 try:
     from deep_translator import GoogleTranslator
     HAS_TRANSLATOR = True
@@ -22,7 +31,7 @@ except ImportError:
 # 1. 페이지 설정
 st.set_page_config(page_title="AAGIG - Game Insight Ground", layout="wide")
 
-# 2. 스타일 시트 (B 영역 디자인 100% 동결)
+# 2. 스타일 시트
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
 <style>
@@ -47,28 +56,39 @@ st.markdown("""
     .tag-gl { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
     .mid-banner { background-color: #55587c; color: white; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; margin: 15px 0; border-radius: 4px; }
     .more-btn { color: #ccc !important; font-weight: normal; text-decoration: none; font-size: 11px; }
+    .error-box { background-color: #fee; border: 1px solid #fcc; padding: 8px; margin: 8px 0; border-radius: 4px; font-size: 11px; color: #c33; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- [UI 선출력] ---
-try: st.image("division8_centered_1800x300.png", use_column_width=True)
-except: pass
+# UI 선출력
+try: 
+    st.image("division8_centered_1800x300.png", use_column_width=True)
+except: 
+    pass
 st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>', unsafe_allow_html=True)
 
-# 3. 보조 로직 (동결)
+# 3. 보조 로직
 def translate_title(text):
-    if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): return text
+    """영문 제목 한글 번역"""
+    if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): 
+        return text
     if HAS_TRANSLATOR:
-        try: return GoogleTranslator(source='auto', target='ko').translate(text)
-        except: pass
+        try: 
+            return GoogleTranslator(source='auto', target='ko').translate(text)
+        except Exception as e:
+            st.warning(f"번역 실패: {e}")
     return text
 
 def is_similar_title(new_title, existing_titles, threshold=0.65):
-    for ext_title in existing_titles:
-        if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold: return True
+    """중복 제목 감지 (최근 50개만 비교로 성능 개선)"""
+    recent_titles = existing_titles[-50:] if len(existing_titles) > 50 else existing_titles
+    for ext_title in recent_titles:
+        if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold: 
+            return True
     return False
 
 def get_relative_time(timestamp):
+    """상대 시간 표시"""
     diff = datetime.now().timestamp() - timestamp
     if diff < 0: return "방금 전"
     if diff < 86400:
@@ -77,46 +97,108 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# [시간 번역기 100% 동결]
 def extract_time_from_text(text):
+    """텍스트에서 시간 정보 추출"""
     now = datetime.now()
+    
+    # YYYY-MM-DD 형식
     match = re.search(r'(202[0-9])[.-](0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
-    if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
+    if match: 
+        return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
+    
+    # MM-DD 형식
     match = re.search(r'(0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
-    if match: return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
+    if match: 
+        return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
+    
+    # "N시간 전" 형식
     match = re.search(r'(\d+)\s*(시간|분|일)\s*전', text)
     if match:
         val, unit = int(match.group(1)), match.group(2)
         if unit == '시간': return (now - timedelta(hours=val)).timestamp()
         if unit == '분': return (now - timedelta(minutes=val)).timestamp()
         if unit == '일': return (now - timedelta(days=val)).timestamp()
+    
+    # HH:MM 형식
     match = re.search(r'([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
-    if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
+    if match: 
+        return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
+    
     return None
 
-# 4. DB 및 수집 엔진 (v59: 네이버 삭제 및 타겟 링크 100% 락온)
-DB_FILE = "aagig_db_v59.json"
+def get_thumbnail(container, source, url):
+    """매체별 썸네일 추출 (함수로 분리)"""
+    img = None
+    
+    if source == "TIG": 
+        img = container.select_one('.news-list-img img, .thumb img, .list-image img, .thumbnail img, .img img')
+    elif source == "인벤": 
+        img = container.select_one('.thumb img, .name img, .image img, .thumbnail img, .list-image img')
+    elif source == "루리웹": 
+        img = container.select_one('a.deco img, .img_wrapper img, .thumbnail img')
+    elif source == "게임메카": 
+        img = container.select_one('.list_img img, .thumb img, .img img, .thumbnail img')
+    elif source == "ZDNet": 
+        img = container.select_one('img') 
+    elif source == "딜사이트": 
+        img = container.select_one('.thumb img, .sn_img img')
+    elif source == "FETV": 
+        img = container.select_one('.thumb img, .img_wrap img')
+    else: 
+        img = container.find('img')
+    
+    thumb = ""
+    if img:
+        for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
+            val = img.get(attr)
+            if val and not val.startswith('data:image') and "blank" not in val.lower():
+                thumb = val
+                break
+    
+    if thumb and not thumb.startswith('http'):
+        thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
+    
+    if not thumb: 
+        thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
+    
+    return thumb
+
+# 4. DB 관리
+DB_FILE = "aagig_db_v60.json"
+
 def load_db():
+    """DB 로드"""
     if os.path.exists(DB_FILE):
         try:
-            with open(DB_FILE, 'r', encoding='utf-8') as f: return json.load(f)
-        except: pass
+            with open(DB_FILE, 'r', encoding='utf-8') as f: 
+                return json.load(f)
+        except Exception as e:
+            st.error(f"DB 로드 실패: {e}")
     return []
-def save_db(data):
-    with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
-@st.cache_data(ttl=300)
+def save_db(data):
+    """DB 저장"""
+    try:
+        with open(DB_FILE, 'w', encoding='utf-8') as f: 
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"DB 저장 실패: {e}")
+
+# 5. 크롤링 엔진
+@st.cache_data(ttl=60)  # TTL 5분→60초로 단축
 def update_articles():
+    """기사 수집 메인 함수"""
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     existing_titles = [item['title'] for item in current_db]
     new_articles = []
+    errors = []
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 안전한 RSS 구역 (100% 동결) ---
+    # --- [1] RSS 피드 수집 ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15)
@@ -124,48 +206,70 @@ def update_articles():
     
     for rss_url, source_name, tag, group, cap in rss_feeds:
         try:
-            r = requests.get(rss_url, headers=headers, timeout=5)
+            r = requests.get(rss_url, headers=headers, timeout=10)
+            r.raise_for_status()
             root = ET.fromstring(r.text)
             feed_temp = []
+            
             for item in root.findall('.//item'):
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
-                    if link in existing_links: continue
-                    final_title = translate_title(title) if group == "global" else title
-                    if is_similar_title(final_title, existing_titles): continue
+                    if link in existing_links: 
+                        continue
                     
+                    final_title = translate_title(title) if group == "global" else title
+                    if is_similar_title(final_title, existing_titles): 
+                        continue
+                    
+                    # 썸네일 추출
                     thumb = ""
                     media = item.find('{http://search.yahoo.com/mrss/}content')
-                    if media is not None: thumb = media.get('url')
+                    if media is not None: 
+                        thumb = media.get('url')
                     if not thumb:
                         enc = item.find('enclosure')
-                        if enc is not None: thumb = enc.get('url')
+                        if enc is not None: 
+                            thumb = enc.get('url')
                     if not thumb:
                         desc = item.find('description')
                         if desc is not None:
                             match = re.search(r'src="([^"]+)"', desc.text)
-                            if match: thumb = match.group(1)
-                            
-                    if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
+                            if match: 
+                                thumb = match.group(1)
+                    
+                    if not thumb: 
+                        thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
+                    # 타임스탬프
                     pub_node = item.find('pubDate')
                     if pub_node is not None:
                         timestamp = parsedate_to_datetime(pub_node.text).timestamp()
                     else:
                         timestamp = datetime.now().timestamp()
-                        
-                    feed_temp.append({"title": final_title, "link": link, "source": source_name, "tag": tag, "group": group, "thumb": thumb, "timestamp": timestamp})
-                except: pass
+                    
+                    feed_temp.append({
+                        "title": final_title, 
+                        "link": link, 
+                        "source": source_name, 
+                        "tag": tag, 
+                        "group": group, 
+                        "thumb": thumb, 
+                        "timestamp": timestamp
+                    })
+                except Exception as e:
+                    errors.append(f"RSS 아이템 파싱 실패 ({source_name}): {e}")
             
             feed_temp.sort(key=lambda x: x['timestamp'], reverse=True)
             for art in feed_temp[:cap]:
                 new_articles.append(art)
                 existing_links.add(art['link'])
                 existing_titles.append(art['title'])
-        except: pass
+                
+        except Exception as e:
+            errors.append(f"RSS 수집 실패 ({source_name}): {e}")
 
-    # --- [2] 1:1 맞춤형 정공법 스크래핑 구역 (수술: 네이버 삭제, 14개 링크 락온) ---
+    # --- [2] HTML 스크래핑 ---
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -177,38 +281,48 @@ def update_articles():
         ("https://www.inven.co.kr/webzine/news/?sclass=25", "인벤", "tag-inven"),
         ("https://www.gamemeca.com/review.php", "게임메카", "tag-kr"),
         ("https://www.gamemeca.com/feature.php", "게임메카", "tag-kr"),
-        ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"), # ZDNet page=2 완벽 삭제
+        ("https://zdnet.co.kr/news/?lstcode=0060", "ZDNet", "tag-kr"),
         ("https://dealsite.co.kr/search/?LIKE=%EB%84%A5%EC%8A%A8&SEARCHFIELD=TITLE_CONTENT&sp=m1&ALSOLIKE=&NOTLIKE=&searchStartDt=&searchEndDt=", "딜사이트", "tag-biz"),
         ("https://bbs.ruliweb.com/news/board/11?cate=1035,1037,1039&view=gallery", "루리웹", "tag-kr"),
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    # [금융 스팸 원천 차단 블랙리스트 유지]
     blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '게시판', '공지사항', '이용안내', '증권', '펀드', '자산운용', '투자증권', 'ISA', '코스닥', '주식', '청약', '금리', '환율', '특징주']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '신작', '플레이', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
         try:
-            r = requests.get(url, headers=headers, timeout=5)
+            # cloudscraper 우선 사용
+            if HAS_CLOUDSCRAPER:
+                r = scraper.get(url, timeout=10)
+            else:
+                r = requests.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            
             soup = BeautifulSoup(r.text, 'html.parser')
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
-                # 사이드바/상단공지 차단 락온 (동결)
+                # 사이드바/공지 차단
                 container_classes = " ".join(container.get('class', [])).lower()
-                if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']): continue
-                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)): continue
-                    
+                if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']): 
+                    continue
+                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or \
+                   container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)): 
+                    continue
+                
                 text_len = len(container.get_text(strip=True))
-                if text_len < 20 or text_len > 400: continue
+                if text_len < 20 or text_len > 400: 
+                    continue
                 
                 a_tags = container.find_all('a', href=True)
-                if not a_tags: continue
+                if not a_tags: 
+                    continue
                 
                 main_a = None
                 title = ""
                 
-                # 딜사이트 전용 락온 (동결 - 네이버는 타겟에서 삭제되었으므로 의미없음)
+                # 딜사이트 전용 셀렉터
                 if source == "딜사이트":
                     title_tag = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, .tit a, strong.tit a')
                     if title_tag:
@@ -216,90 +330,84 @@ def update_articles():
                         main_a = title_tag
                     else:
                         continue
-                
-                elif source == "네이버": # 기존 로직 유지만 함 (접근 안 함)
-                    title_tag = container.select_one('a.news_tit, a.tit, .news_tit')
-                    if title_tag:
-                        title = title_tag.get_text(strip=True)
-                        main_a = title_tag
-                    else:
-                        continue
-                
                 else:
+                    # 일반 로직 (가장 긴 텍스트를 제목으로)
                     for a in a_tags:
                         t = a.get_text(strip=True)
                         if len(t) > max(len(title), 12):
                             title = t
                             main_a = a
                 
-                if not main_a: continue
+                if not main_a: 
+                    continue
                 
+                # 링크 정규화
                 link = main_a['href']
-                if not link.startswith('http'): link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
+                if not link.startswith('http'): 
+                    link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
                 
-                # 쇼핑몰 영구 차단망 (동결)
-                if any(spam in link for spam in ['smartstore', 'market.inven', 'shopping']): continue
-                
-                if link in existing_links or "javascript:" in link: continue
-                if any(b in title for b in blacklist): continue
-                if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
-                if is_similar_title(title, existing_titles): continue
+                # 필터링
+                if any(spam in link for spam in ['smartstore', 'market.inven', 'shopping']): 
+                    continue
+                if link in existing_links or "javascript:" in link: 
+                    continue
+                if any(b in title for b in blacklist): 
+                    continue
+                if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): 
+                    continue
+                if is_similar_title(title, existing_titles): 
+                    continue
 
-                # [1:1 매체별 썸네일 격리 - 100% 동결]
-                thumb = ""
-                img = None
+                # 썸네일 추출 (함수 사용)
+                thumb = get_thumbnail(container, source, url)
                 
-                if source == "TIG": img = container.select_one('.news-list-img img, .thumb img, .list-image img, .thumbnail img, .img img')
-                elif source == "인벤": img = container.select_one('.thumb img, .name img, .image img, .thumbnail img, .list-image img')
-                elif source == "루리웹": img = container.select_one('a.deco img, .img_wrapper img, .thumbnail img')
-                elif source == "게임메카": img = container.select_one('.list_img img, .thumb img, .img img, .thumbnail img')
-                elif source == "네이버": img = container.select_one('.dsc_thumb img, .thumb img')
-                elif source == "ZDNet": img = container.select_one('img') 
-                elif source == "딜사이트": img = container.select_one('.thumb img, .sn_img img')
-                elif source == "FETV": img = container.select_one('.thumb img, .img_wrap img')
-                else: img = container.find('img')
-                
-                if img:
-                    for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
-                        val = img.get(attr)
-                        if val and not val.startswith('data:image') and "blank" not in val.lower():
-                            thumb = val
-                            break
-                            
-                if thumb and not thumb.startswith('http'):
-                    thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
-                
-                if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
-                
+                # 타임스탬프 추출
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
-                if not ts: ts = datetime.now().timestamp()
+                if not ts: 
+                    ts = datetime.now().timestamp()
                 
-                new_articles.append({"title": title, "link": link, "source": source, "tag": tag, "group": "domestic", "thumb": thumb, "timestamp": ts})
+                new_articles.append({
+                    "title": title, 
+                    "link": link, 
+                    "source": source, 
+                    "tag": tag, 
+                    "group": "domestic", 
+                    "thumb": thumb, 
+                    "timestamp": ts
+                })
                 existing_links.add(link)
                 existing_titles.append(title)
                 
                 count += 1
-                if source == "네이버":
-                    if count >= 3: break
-                else:
-                    if count >= 5: break 
-        except: pass
+                if count >= 5: 
+                    break
+                    
+        except Exception as e:
+            errors.append(f"HTML 수집 실패 ({source}): {e}")
 
+    # 에러 표시
+    if errors:
+        with st.expander(f"⚠️ 수집 중 {len(errors)}개 오류 발생 (클릭해서 확인)", expanded=False):
+            for err in errors:
+                st.markdown(f'<div class="error-box">{err}</div>', unsafe_allow_html=True)
+
+    # DB 정렬 및 저장
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
     save_db(final_db[:300])
     return final_db
 
-# [데이터 수집 시 로딩 스피너 적용]
-with st.spinner('허가된 14개 정예 링크에서만 기사를 수집 중입니다...'):
+# --- 데이터 수집 ---
+with st.spinner('14개 소스에서 기사 수집 중...'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 
-# --- 6분할 레이아웃 출력 (양식 깨짐 방벽 html.escape 유지) ---
+# --- 6분할 레이아웃 출력 ---
 def draw_box(col, header, data_list):
+    """박스 렌더링"""
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html_str = '<div class="custom-box">'
@@ -322,7 +430,8 @@ def draw_box(col, header, data_list):
                     </div>
                 </div>
             </div>"""
-        html_str += '</div>'; st.markdown(html_str, unsafe_allow_html=True)
+        html_str += '</div>'
+        st.markdown(html_str, unsafe_allow_html=True)
 
 r1_c1, r1_c2 = st.columns(2)
 draw_box(r1_c1, "국내 주요 매체/웹진", dom)
@@ -337,4 +446,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v118.0 (Strict 14 Target Lock-in & Naver Purged)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v120.0 (Error Handling + CloudScraper + Performance Fix)</div>', unsafe_allow_html=True)
