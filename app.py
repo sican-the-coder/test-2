@@ -12,10 +12,13 @@ import difflib
 import html
 from bs4 import BeautifulSoup
 
-# cloudscraper 추가 (Cloudflare 우회용)
+# cloudscraper 추가 (Cloudflare 및 TIG 403 우회 강화)
 try:
     import cloudscraper
-    scraper = cloudscraper.create_scraper()
+    # 봇이 아닌 진짜 윈도우 크롬 브라우저인 것처럼 정밀 위장
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+    )
     HAS_CLOUDSCRAPER = True
 except ImportError:
     HAS_CLOUDSCRAPER = False
@@ -69,18 +72,16 @@ st.markdown('<div class="sub-logo-header">AAGIG: 8실 Game Insight Ground</div>'
 
 # 3. 보조 로직
 def translate_title(text):
-    """영문 제목 한글 번역"""
     if not re.search('[a-zA-Z]', text) or re.search('[가-힣]', text): 
         return text
     if HAS_TRANSLATOR:
         try: 
             return GoogleTranslator(source='auto', target='ko').translate(text)
         except Exception as e:
-            st.warning(f"번역 실패: {e}")
+            pass
     return text
 
 def is_similar_title(new_title, existing_titles, threshold=0.65):
-    """중복 제목 감지 (최근 50개만 비교로 성능 개선)"""
     recent_titles = existing_titles[-50:] if len(existing_titles) > 50 else existing_titles
     for ext_title in recent_titles:
         if difflib.SequenceMatcher(None, new_title, ext_title).ratio() > threshold: 
@@ -88,7 +89,6 @@ def is_similar_title(new_title, existing_titles, threshold=0.65):
     return False
 
 def get_relative_time(timestamp):
-    """상대 시간 표시"""
     diff = datetime.now().timestamp() - timestamp
     if diff < 0: return "방금 전"
     if diff < 86400:
@@ -97,14 +97,9 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
-# [수술 1] 시간 추출 정규식 대폭 업그레이드
 def extract_time_from_text(text):
-    """텍스트에서 시간 정보 추출 (스캐너 강화)"""
     now = datetime.now()
-    
-    # "방금 전", "N분 전", "N시간 전"
-    if re.search(r'방금\s*전', text):
-        return now.timestamp()
+    if re.search(r'방금\s*전', text): return now.timestamp()
     
     match = re.search(r'(\d+)\s*(시간|분|일)\s*전', text)
     if match:
@@ -113,94 +108,68 @@ def extract_time_from_text(text):
         if unit == '분': return (now - timedelta(minutes=val)).timestamp()
         if unit == '일': return (now - timedelta(days=val)).timestamp()
     
-    # YYYY.MM.DD HH:MM
     match = re.search(r'(202[0-9])[./-](0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])\s+([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
     if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4)), int(match.group(5))).timestamp()
     
-    # YYYY.MM.DD
     match = re.search(r'(202[0-9])[./-](0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
     if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
     
-    # MM.DD HH:MM
     match = re.search(r'(0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])\s+([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
     if match: return datetime(now.year, int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4))).timestamp()
     
-    # MM.DD
     match = re.search(r'(0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
     if match: return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
     
-    # HH:MM
     match = re.search(r'([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
     if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     
     return None
 
-# [수술 2] 스마트 정수기 방식 썸네일 추출
 def get_thumbnail(container, source, url):
-    """클래스명 무시! 기사 박스 내 모든 이미지를 스캔하여 가짜(아이콘)를 거르고 진짜만 추출"""
     thumb = ""
     imgs = container.find_all('img')
-    
-    # 스팸/가짜 이미지 필터링 단어들
     spam_keywords = ['icon', 'logo', 'blank', 'gif', 'profile', 'avatar', 'tracker', 'svg', 'button']
     
     for img in imgs:
         for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
             val = img.get(attr)
             if not val: continue
-            
             val_lower = val.lower()
-            
-            # 1. Base64 가짜 투명 이미지 제외
             if val_lower.startswith('data:image'): continue
-            
-            # 2. 로고나 아이콘 단어가 포함되면 버림 (정수기 필터)
             if any(spam in val_lower for spam in spam_keywords): continue
             
-            # 필터를 무사 통과한 첫 번째 이미지를 썸네일로 확정
             thumb = val
             break
-        
         if thumb: break
 
-    # 상대 경로(http 없는 경우) 처리
     if thumb:
         if thumb.startswith('//'):
             thumb = f"https:{thumb}"
         elif not thumb.startswith('http'):
             thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
-    
-    # 끝까지 못 찾았을 때만 기본 로고
+            
     if not thumb: 
         thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
-    
     return thumb
 
-# 4. DB 관리
-DB_FILE = "aagig_db_v61.json"
+# 4. DB 관리 (v62 로 업데이트하여 오염된 링크/제목 캐시 완전 파기)
+DB_FILE = "aagig_db_v62.json"
 
 def load_db():
-    """DB 로드"""
     if os.path.exists(DB_FILE):
         try:
-            with open(DB_FILE, 'r', encoding='utf-8') as f: 
-                return json.load(f)
-        except Exception as e:
-            st.error(f"DB 로드 실패: {e}")
+            with open(DB_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+        except: pass
     return []
 
 def save_db(data):
-    """DB 저장"""
     try:
-        with open(DB_FILE, 'w', encoding='utf-8') as f: 
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.error(f"DB 저장 실패: {e}")
+        with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+    except: pass
 
 # 5. 크롤링 엔진
 @st.cache_data(ttl=60)
 def update_articles():
-    """기사 수집 메인 함수"""
     current_db = load_db()
     existing_links = {item['link'] for item in current_db}
     existing_titles = [item['title'] for item in current_db]
@@ -211,7 +180,7 @@ def update_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] RSS 피드 수집 ---
+    # --- [1] RSS ---
     rss_feeds = [
         ("https://www.gamespot.com/feeds/news/", "GameSpot", "tag-global", "global", 20),
         ("https://news.google.com/rss/search?q=서정근+MTN&hl=ko&gl=KR&ceid=KR:ko", "MTN", "tag-mtn", "mtn_only", 15)
@@ -228,50 +197,28 @@ def update_articles():
                 try:
                     title = item.find('title').text.strip()
                     link = item.find('link').text.strip()
-                    if link in existing_links: 
-                        continue
-                    
+                    if link in existing_links: continue
                     final_title = translate_title(title) if group == "global" else title
-                    if is_similar_title(final_title, existing_titles): 
-                        continue
+                    if is_similar_title(final_title, existing_titles): continue
                     
-                    # 썸네일 추출
                     thumb = ""
                     media = item.find('{http://search.yahoo.com/mrss/}content')
-                    if media is not None: 
-                        thumb = media.get('url')
+                    if media is not None: thumb = media.get('url')
                     if not thumb:
                         enc = item.find('enclosure')
-                        if enc is not None: 
-                            thumb = enc.get('url')
+                        if enc is not None: thumb = enc.get('url')
                     if not thumb:
                         desc = item.find('description')
                         if desc is not None:
                             match = re.search(r'src="([^"]+)"', desc.text)
-                            if match: 
-                                thumb = match.group(1)
-                    
-                    if not thumb: 
-                        thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
+                            if match: thumb = match.group(1)
+                    if not thumb: thumb = f"https://www.google.com/s2/favicons?domain={source_name}.com&sz=128"
 
-                    # 타임스탬프
                     pub_node = item.find('pubDate')
-                    if pub_node is not None:
-                        timestamp = parsedate_to_datetime(pub_node.text).timestamp()
-                    else:
-                        timestamp = datetime.now().timestamp()
+                    timestamp = parsedate_to_datetime(pub_node.text).timestamp() if pub_node is not None else datetime.now().timestamp()
                     
-                    feed_temp.append({
-                        "title": final_title, 
-                        "link": link, 
-                        "source": source_name, 
-                        "tag": tag, 
-                        "group": group, 
-                        "thumb": thumb, 
-                        "timestamp": timestamp
-                    })
-                except Exception as e:
-                    errors.append(f"RSS 아이템 파싱 실패 ({source_name}): {e}")
+                    feed_temp.append({"title": final_title, "link": link, "source": source_name, "tag": tag, "group": group, "thumb": thumb, "timestamp": timestamp})
+                except: pass
             
             feed_temp.sort(key=lambda x: x['timestamp'], reverse=True)
             for art in feed_temp[:cap]:
@@ -280,9 +227,9 @@ def update_articles():
                 existing_titles.append(art['title'])
                 
         except Exception as e:
-            errors.append(f"RSS 수집 실패 ({source_name}): {e}")
+            errors.append(f"RSS 실패 ({source_name}): {e}")
 
-    # --- [2] HTML 스크래핑 (14개 정예 링크) ---
+    # --- [2] HTML 스크래핑 ---
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -300,12 +247,12 @@ def update_articles():
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '게시판', '공지사항', '이용안내', '증권', '펀드', '자산운용', '투자증권', 'ISA', '코스닥', '주식', '청약', '금리', '환율', '특징주']
+    # 쿠폰, 무료, 광고 등 스팸 키워드 강화
+    blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '게시판', '공지사항', '이용안내', '증권', '펀드', '자산운용', '투자증권', 'ISA', '코스닥', '주식', '청약', '금리', '환율', '특징주', '쿠폰', '무료', '광고', '협찬', '할인']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '신작', '플레이', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
         try:
-            # cloudscraper 우선 사용
             if HAS_CLOUDSCRAPER:
                 r = scraper.get(url, timeout=10)
             else:
@@ -316,69 +263,55 @@ def update_articles():
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
-                # 사이드바/공지 차단
                 container_classes = " ".join(container.get('class', [])).lower()
                 if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']): 
                     continue
-                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or \
-                   container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)): 
+                if container.find_parent(class_=re.compile(r'(side|best|rank|hit|wing|right)', re.I)) or container.find_parent(id=re.compile(r'(side|best|rank|hit|wing|right)', re.I)): 
                     continue
                 
                 text_len = len(container.get_text(strip=True))
-                if text_len < 20 or text_len > 400: 
+                if text_len < 10: 
                     continue
                 
-                a_tags = container.find_all('a', href=True)
-                if not a_tags: 
-                    continue
+                title_a = None
                 
-                main_a = None
-                title = ""
-                
-                # 딜사이트 전용 셀렉터
+                # [핵심 수술] 예비 로직 전면 폐기! 오직 정확한 기사 제목 링크 태그만 스나이핑
                 if source == "딜사이트":
-                    title_tag = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, .tit a, strong.tit a')
-                    if title_tag:
-                        title = title_tag.get_text(strip=True)
-                        main_a = title_tag
-                    else:
-                        continue
-                else:
-                    # 일반 로직 (가장 긴 텍스트를 제목으로)
-                    for a in a_tags:
-                        t = a.get_text(strip=True)
-                        if len(t) > max(len(title), 12):
-                            title = t
-                            main_a = a
+                    title_a = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, strong.tit a')
+                elif source == "게임메카":
+                    title_a = container.select_one('.list_tit a, .tit a, strong a')
+                elif source == "루리웹":
+                    title_a = container.select_one('.title a, a.deco, .subject a')
+                elif source == "인벤":
+                    title_a = container.select_one('.title a, .name a, .subject a')
+                elif source == "TIG":
+                    title_a = container.select_one('.list-title a, .tit a, .subject a')
+                elif source == "FETV":
+                    title_a = container.select_one('.tit a, .title a')
+                else: # ZDNet 등 나머지
+                    title_a = container.select_one('a')
                 
-                if not main_a: 
+                # 정확한 태그를 못 찾았으면 미련 없이 버림 (메뉴바/위젯 오작동 차단)
+                if not title_a:
                     continue
                 
-                # 링크 정규화
-                link = main_a['href']
+                title = title_a.get_text(strip=True)
+                link = title_a['href']
+                
                 if not link.startswith('http'): 
                     link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
                 
-                # 필터링
-                if any(spam in link for spam in ['smartstore', 'market.inven', 'shopping']): 
-                    continue
-                if link in existing_links or "javascript:" in link: 
-                    continue
-                if any(b in title for b in blacklist): 
-                    continue
-                if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): 
-                    continue
-                if is_similar_title(title, existing_titles): 
-                    continue
+                if any(spam in link for spam in ['smartstore', 'market.inven', 'shopping']): continue
+                if link in existing_links or "javascript:" in link: continue
+                if any(b in title for b in blacklist): continue
+                if source in ["FETV", "딜사이트"] and not any(w in title for w in game_whitelist): continue
+                if is_similar_title(title, existing_titles): continue
 
-                # 썸네일 추출 (스마트 정수기 필터 작동)
                 thumb = get_thumbnail(container, source, url)
                 
-                # 타임스탬프 추출 (시간 못 찾을 시 가벼운 페널티 부여하여 "방금전" 도배 방지)
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
                 if not ts: 
-                    # 순서대로 10분, 11분, 12분 전으로 페널티 주어 "방금 전" 최상단 도배 차단
                     ts = datetime.now().timestamp() - 600 - (count * 60)
                 
                 new_articles.append({
@@ -400,18 +333,15 @@ def update_articles():
         except Exception as e:
             errors.append(f"HTML 수집 실패 ({source}): {e}")
 
-    # 에러 표시 (접을 수 있는 에러박스)
     if errors:
         with st.expander(f"⚠️ 수집 중 {len(errors)}개 오류 발생 (클릭해서 확인)", expanded=False):
             for err in errors:
                 st.markdown(f'<div class="error-box">{err}</div>', unsafe_allow_html=True)
 
-    # DB 정렬 및 저장
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
     save_db(final_db[:300])
     return final_db
 
-# --- 데이터 수집 ---
 with st.spinner('14개 소스에서 기사 수집 중...'):
     live_data = update_articles()
 
@@ -419,9 +349,7 @@ dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 
-# --- 6분할 레이아웃 출력 ---
 def draw_box(col, header, data_list):
-    """박스 렌더링"""
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html_str = '<div class="custom-box">'
@@ -460,4 +388,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v121.0 (Smart Thumbnail Filter & Time Spam Fixed)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v122.0 (Strict Title/Link Lock-on & TIG Cloudflare Bypass)</div>', unsafe_allow_html=True)
