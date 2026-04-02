@@ -97,21 +97,15 @@ def get_relative_time(timestamp):
         return "방금 전"
     return f"{int(diff // 86400)}일 전"
 
+# [수술 1] 시간 추출 정규식 대폭 업그레이드
 def extract_time_from_text(text):
-    """텍스트에서 시간 정보 추출"""
+    """텍스트에서 시간 정보 추출 (스캐너 강화)"""
     now = datetime.now()
     
-    # YYYY-MM-DD 형식
-    match = re.search(r'(202[0-9])[.-](0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
-    if match: 
-        return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
+    # "방금 전", "N분 전", "N시간 전"
+    if re.search(r'방금\s*전', text):
+        return now.timestamp()
     
-    # MM-DD 형식
-    match = re.search(r'(0[1-9]|1[0-2]|[1-9])[.-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
-    if match: 
-        return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
-    
-    # "N시간 전" 형식
     match = re.search(r'(\d+)\s*(시간|분|일)\s*전', text)
     if match:
         val, unit = int(match.group(1)), match.group(2)
@@ -119,52 +113,71 @@ def extract_time_from_text(text):
         if unit == '분': return (now - timedelta(minutes=val)).timestamp()
         if unit == '일': return (now - timedelta(days=val)).timestamp()
     
-    # HH:MM 형식
+    # YYYY.MM.DD HH:MM
+    match = re.search(r'(202[0-9])[./-](0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])\s+([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
+    if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4)), int(match.group(5))).timestamp()
+    
+    # YYYY.MM.DD
+    match = re.search(r'(202[0-9])[./-](0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
+    if match: return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).timestamp()
+    
+    # MM.DD HH:MM
+    match = re.search(r'(0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])\s+([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
+    if match: return datetime(now.year, int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4))).timestamp()
+    
+    # MM.DD
+    match = re.search(r'(0[1-9]|1[0-2]|[1-9])[./-](0[1-9]|[12][0-9]|3[01]|[1-9])', text)
+    if match: return datetime(now.year, int(match.group(1)), int(match.group(2))).timestamp()
+    
+    # HH:MM
     match = re.search(r'([01]?[0-9]|2[0-3]):([0-5][0-9])', text)
-    if match: 
-        return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
+    if match: return now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0).timestamp()
     
     return None
 
+# [수술 2] 스마트 정수기 방식 썸네일 추출
 def get_thumbnail(container, source, url):
-    """매체별 썸네일 추출 (함수로 분리)"""
-    img = None
-    
-    if source == "TIG": 
-        img = container.select_one('.news-list-img img, .thumb img, .list-image img, .thumbnail img, .img img')
-    elif source == "인벤": 
-        img = container.select_one('.thumb img, .name img, .image img, .thumbnail img, .list-image img')
-    elif source == "루리웹": 
-        img = container.select_one('a.deco img, .img_wrapper img, .thumbnail img')
-    elif source == "게임메카": 
-        img = container.select_one('.list_img img, .thumb img, .img img, .thumbnail img')
-    elif source == "ZDNet": 
-        img = container.select_one('img') 
-    elif source == "딜사이트": 
-        img = container.select_one('.thumb img, .sn_img img')
-    elif source == "FETV": 
-        img = container.select_one('.thumb img, .img_wrap img')
-    else: 
-        img = container.find('img')
-    
+    """클래스명 무시! 기사 박스 내 모든 이미지를 스캔하여 가짜(아이콘)를 거르고 진짜만 추출"""
     thumb = ""
-    if img:
+    imgs = container.find_all('img')
+    
+    # 스팸/가짜 이미지 필터링 단어들
+    spam_keywords = ['icon', 'logo', 'blank', 'gif', 'profile', 'avatar', 'tracker', 'svg', 'button']
+    
+    for img in imgs:
         for attr in ['data-lazysrc', 'data-original', 'data-src', 'data-lazy-src', 'src']:
             val = img.get(attr)
-            if val and not val.startswith('data:image') and "blank" not in val.lower():
-                thumb = val
-                break
+            if not val: continue
+            
+            val_lower = val.lower()
+            
+            # 1. Base64 가짜 투명 이미지 제외
+            if val_lower.startswith('data:image'): continue
+            
+            # 2. 로고나 아이콘 단어가 포함되면 버림 (정수기 필터)
+            if any(spam in val_lower for spam in spam_keywords): continue
+            
+            # 필터를 무사 통과한 첫 번째 이미지를 썸네일로 확정
+            thumb = val
+            break
+        
+        if thumb: break
+
+    # 상대 경로(http 없는 경우) 처리
+    if thumb:
+        if thumb.startswith('//'):
+            thumb = f"https:{thumb}"
+        elif not thumb.startswith('http'):
+            thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
     
-    if thumb and not thumb.startswith('http'):
-        thumb = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{thumb}"
-    
+    # 끝까지 못 찾았을 때만 기본 로고
     if not thumb: 
         thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
     
     return thumb
 
 # 4. DB 관리
-DB_FILE = "aagig_db_v60.json"
+DB_FILE = "aagig_db_v61.json"
 
 def load_db():
     """DB 로드"""
@@ -185,7 +198,7 @@ def save_db(data):
         st.error(f"DB 저장 실패: {e}")
 
 # 5. 크롤링 엔진
-@st.cache_data(ttl=60)  # TTL 5분→60초로 단축
+@st.cache_data(ttl=60)
 def update_articles():
     """기사 수집 메인 함수"""
     current_db = load_db()
@@ -269,7 +282,7 @@ def update_articles():
         except Exception as e:
             errors.append(f"RSS 수집 실패 ({source_name}): {e}")
 
-    # --- [2] HTML 스크래핑 ---
+    # --- [2] HTML 스크래핑 (14개 정예 링크) ---
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -358,14 +371,15 @@ def update_articles():
                 if is_similar_title(title, existing_titles): 
                     continue
 
-                # 썸네일 추출 (함수 사용)
+                # 썸네일 추출 (스마트 정수기 필터 작동)
                 thumb = get_thumbnail(container, source, url)
                 
-                # 타임스탬프 추출
+                # 타임스탬프 추출 (시간 못 찾을 시 가벼운 페널티 부여하여 "방금전" 도배 방지)
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
                 if not ts: 
-                    ts = datetime.now().timestamp()
+                    # 순서대로 10분, 11분, 12분 전으로 페널티 주어 "방금 전" 최상단 도배 차단
+                    ts = datetime.now().timestamp() - 600 - (count * 60)
                 
                 new_articles.append({
                     "title": title, 
@@ -386,7 +400,7 @@ def update_articles():
         except Exception as e:
             errors.append(f"HTML 수집 실패 ({source}): {e}")
 
-    # 에러 표시
+    # 에러 표시 (접을 수 있는 에러박스)
     if errors:
         with st.expander(f"⚠️ 수집 중 {len(errors)}개 오류 발생 (클릭해서 확인)", expanded=False):
             for err in errors:
@@ -446,4 +460,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v120.0 (Error Handling + CloudScraper + Performance Fix)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v121.0 (Smart Thumbnail Filter & Time Spam Fixed)</div>', unsafe_allow_html=True)
