@@ -12,12 +12,10 @@ import difflib
 import html
 from bs4 import BeautifulSoup
 
-# [수술 1] cloudscraper 정밀 위장 장착 (딜사이트 403 돌파용)
+# cloudscraper 추가 (Cloudflare 우회용)
 try:
     import cloudscraper
-    scraper = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-    )
+    scraper = cloudscraper.create_scraper()
     HAS_CLOUDSCRAPER = True
 except ImportError:
     HAS_CLOUDSCRAPER = False
@@ -98,7 +96,6 @@ def get_relative_time(timestamp):
 
 def extract_time_from_text(text):
     now = datetime.now()
-    
     if re.search(r'방금\s*전', text):
         return now.timestamp()
     
@@ -129,7 +126,6 @@ def extract_time_from_text(text):
 def get_thumbnail(container, source, url):
     thumb = ""
     imgs = container.find_all('img')
-    
     spam_keywords = ['icon', 'logo', 'blank', 'gif', 'profile', 'avatar', 'tracker', 'svg', 'button']
     
     for img in imgs:
@@ -157,7 +153,7 @@ def get_thumbnail(container, source, url):
     return thumb
 
 # 4. DB 관리
-DB_FILE = "aagig_db_v65.json"
+DB_FILE = "aagig_db_v67.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -246,7 +242,7 @@ def update_articles():
                         "timestamp": timestamp
                     })
                 except Exception as e:
-                    errors.append(f"RSS 아이템 파싱 실패 ({source_name}): {e}")
+                    pass
             
             feed_temp.sort(key=lambda x: x['timestamp'], reverse=True)
             for art in feed_temp[:cap]:
@@ -257,7 +253,7 @@ def update_articles():
         except Exception as e:
             errors.append(f"RSS 수집 실패 ({source_name}): {e}")
 
-    # --- [2] HTML 스크래핑 (14개 정예 링크) ---
+    # --- [2] HTML 스크래핑 ---
     html_targets = [
         ("https://www.thisisgame.com/articles?newsId=400003&categoryId=0", "TIG", "tag-kr"),
         ("https://www.thisisgame.com/articles?newsId=400004&categoryId=0", "TIG", "tag-kr"),
@@ -280,12 +276,23 @@ def update_articles():
 
     for url, source, tag in html_targets:
         try:
-            # [수술 2] 타겟별 맞춤 라우팅 적용
-            if source == "TIG":
-                # TIG는 성공 확인된 일반 requests 사용
+            # [수술 1] 딜사이트와 TIG 핀셋 라우팅
+            if source == "딜사이트":
+                # 딜사이트 전용 초강력 위장 헤더
+                dealsite_headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Referer': 'https://www.google.com/',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
+                r = requests.get(url, headers=dealsite_headers, timeout=10)
+            elif source == "TIG":
+                # TIG는 성공이 확인된 일반 requests 고정
                 r = requests.get(url, headers=headers, timeout=10)
             else:
-                # 딜사이트 및 나머지 매체는 강화된 cloudscraper 우선 사용
+                # 나머지(인벤/루리웹 등)는 기본 로직 유지
                 if HAS_CLOUDSCRAPER:
                     r = scraper.get(url, timeout=10)
                 else:
@@ -297,7 +304,6 @@ def update_articles():
             count = 0
             
             for container in soup.find_all(['li', 'tr', 'div']):
-                # 사이드바/공지 차단
                 container_classes = " ".join(container.get('class', [])).lower()
                 if any(skip_word in container_classes for skip_word in ['notice', 'ad', 'headline', '공지']): 
                     continue
@@ -316,7 +322,6 @@ def update_articles():
                 main_a = None
                 title = ""
                 
-                # 딜사이트 전용 셀렉터
                 if source == "딜사이트":
                     title_tag = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, .tit a, strong.tit a')
                     if title_tag:
@@ -325,7 +330,6 @@ def update_articles():
                     else:
                         continue
                 else:
-                    # 일반 로직 (가장 긴 텍스트를 제목으로 - v121 뼈대 유지)
                     for a in a_tags:
                         t = a.get_text(strip=True)
                         if len(t) > max(len(title), 12):
@@ -335,12 +339,10 @@ def update_articles():
                 if not main_a: 
                     continue
                 
-                # 링크 정규화
                 link = main_a['href']
                 if not link.startswith('http'): 
                     link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
                 
-                # 필터링
                 if any(spam in link for spam in ['smartstore', 'market.inven', 'shopping']): 
                     continue
                 if link in existing_links or "javascript:" in link: 
@@ -352,10 +354,8 @@ def update_articles():
                 if is_similar_title(title, existing_titles): 
                     continue
 
-                # 썸네일 추출 (스마트 정수기 필터)
                 thumb = get_thumbnail(container, source, url)
                 
-                # 타임스탬프 추출 (페널티 적용 유지)
                 container_text = container.get_text(separator=' ')
                 ts = extract_time_from_text(container_text)
                 if not ts: 
@@ -380,18 +380,15 @@ def update_articles():
         except Exception as e:
             errors.append(f"HTML 수집 실패 ({source}): {e}")
 
-    # 에러 표시
     if errors:
         with st.expander(f"⚠️ 수집 중 {len(errors)}개 오류 발생 (클릭해서 확인)", expanded=False):
             for err in errors:
                 st.markdown(f'<div class="error-box">{err}</div>', unsafe_allow_html=True)
 
-    # DB 정렬 및 저장
     final_db = sorted((current_db + new_articles), key=lambda x: x['timestamp'], reverse=True)
     save_db(final_db[:300])
     return final_db
 
-# --- 데이터 수집 ---
 with st.spinner('14개 소스에서 기사 수집 중...'):
     live_data = update_articles()
 
@@ -399,9 +396,7 @@ dom = [d for d in live_data if d['group'] == "domestic"]
 glo = [d for d in live_data if d['group'] == "global"]
 mtn = [d for d in live_data if d['group'] == "mtn_only"]
 
-# --- 6분할 레이아웃 출력 ---
 def draw_box(col, header, data_list):
-    """박스 렌더링"""
     with col:
         st.markdown(f'<div class="section-bar"><span>{header}</span><a href="#" class="more-btn">더보기 ➔</a></div>', unsafe_allow_html=True)
         html_str = '<div class="custom-box">'
@@ -440,4 +435,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v125.0 (Dealsite Cloudscraper Bypass Update)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v127.0 (Dealsite Deep Disguise Fix)</div>', unsafe_allow_html=True)
