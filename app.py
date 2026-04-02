@@ -12,10 +12,10 @@ import difflib
 import html
 from bs4 import BeautifulSoup
 
-# cloudscraper 추가 (Cloudflare 및 TIG 403 우회 강화)
+# cloudscraper 추가 (Cloudflare 방어막 우회용)
 try:
     import cloudscraper
-    # 봇이 아닌 진짜 윈도우 크롬 브라우저인 것처럼 정밀 위장
+    # 크롬 브라우저로 정밀 위장
     scraper = cloudscraper.create_scraper(
         browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
     )
@@ -77,7 +77,7 @@ def translate_title(text):
     if HAS_TRANSLATOR:
         try: 
             return GoogleTranslator(source='auto', target='ko').translate(text)
-        except Exception as e:
+        except:
             pass
     return text
 
@@ -126,6 +126,7 @@ def extract_time_from_text(text):
     return None
 
 def get_thumbnail(container, source, url):
+    # 스마트 정수기 로직 유지 (안전함)
     thumb = ""
     imgs = container.find_all('img')
     spam_keywords = ['icon', 'logo', 'blank', 'gif', 'profile', 'avatar', 'tracker', 'svg', 'button']
@@ -152,8 +153,8 @@ def get_thumbnail(container, source, url):
         thumb = f"https://www.google.com/s2/favicons?domain={source}.com&sz=128"
     return thumb
 
-# 4. DB 관리 (v62 로 업데이트하여 오염된 링크/제목 캐시 완전 파기)
-DB_FILE = "aagig_db_v62.json"
+# 4. DB 관리 (오염된 데이터 초기화 위해 v63으로 판올림)
+DB_FILE = "aagig_db_v63.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -176,8 +177,11 @@ def update_articles():
     new_articles = []
     errors = []
     
+    # 일반 봇 차단을 뚫기 위한 강력한 헤더 위장
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
     }
 
     # --- [1] RSS ---
@@ -247,16 +251,22 @@ def update_articles():
         ("https://www.fetv.co.kr/news/section_list_all.html?sec_no=59", "FETV", "tag-biz")
     ]
     
-    # 쿠폰, 무료, 광고 등 스팸 키워드 강화
+    # 쿠폰, 무료, 광고, 협찬 등 스팸 차단 강화
     blacklist = ['[질문]', '[잡담]', '[단편]', '[연재]', '올림픽', '아시안게임', '만화', '서적', '결혼', '부고', '게시판', '공지사항', '이용안내', '증권', '펀드', '자산운용', '투자증권', 'ISA', '코스닥', '주식', '청약', '금리', '환율', '특징주', '쿠폰', '무료', '광고', '협찬', '할인']
     game_whitelist = ['게임', '넥슨', '넷마블', '엔씨', '크래프톤', '카카오게임즈', '스마일게이트', '펄어비스', '위메이드', '컴투스', '스팀', '콘솔', 'PC', 'e스포츠', '게이머', '신작', '플레이', 'RPG', 'MMO']
 
     for url, source, tag in html_targets:
         try:
-            if HAS_CLOUDSCRAPER:
-                r = scraper.get(url, timeout=10)
-            else:
+            # [수술 1] 딜사이트, ZDNet은 반드시 일반 requests 사용 (동반 에러 방지)
+            if source in ["딜사이트", "ZDNet"]:
                 r = requests.get(url, headers=headers, timeout=10)
+            else:
+                # TIG, 인벤, 루리웹 등은 클라우드스크래퍼 시도
+                if HAS_CLOUDSCRAPER:
+                    r = scraper.get(url, timeout=10)
+                else:
+                    r = requests.get(url, headers=headers, timeout=10)
+            
             r.raise_for_status()
             
             soup = BeautifulSoup(r.text, 'html.parser')
@@ -273,31 +283,44 @@ def update_articles():
                 if text_len < 10: 
                     continue
                 
-                title_a = None
-                
-                # [핵심 수술] 예비 로직 전면 폐기! 오직 정확한 기사 제목 링크 태그만 스나이핑
-                if source == "딜사이트":
-                    title_a = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, strong.tit a')
-                elif source == "게임메카":
-                    title_a = container.select_one('.list_tit a, .tit a, strong a')
-                elif source == "루리웹":
-                    title_a = container.select_one('.title a, a.deco, .subject a')
-                elif source == "인벤":
-                    title_a = container.select_one('.title a, .name a, .subject a')
-                elif source == "TIG":
-                    title_a = container.select_one('.list-title a, .tit a, .subject a')
-                elif source == "FETV":
-                    title_a = container.select_one('.tit a, .title a')
-                else: # ZDNet 등 나머지
-                    title_a = container.select_one('a')
-                
-                # 정확한 태그를 못 찾았으면 미련 없이 버림 (메뉴바/위젯 오작동 차단)
-                if not title_a:
+                a_tags = container.find_all('a', href=True)
+                if not a_tags: 
                     continue
+
+                main_a = None
+                title = ""
                 
-                title = title_a.get_text(strip=True)
-                link = title_a['href']
+                # [수술 2] 각 매체별 1:1 정밀 락온 & ZDNet 예비 로직 복구
+                if source == "딜사이트":
+                    main_a = container.select_one('.sn_title a, .title a, h3 a, .sn_tit a, strong.tit a')
+                elif source == "게임메카":
+                    main_a = container.select_one('.list_tit a, .tit a, strong a')
+                elif source == "루리웹":
+                    main_a = container.select_one('.subject a, .title a, a.deco')
+                elif source == "인벤":
+                    main_a = container.select_one('.title a, .name a, .subject a')
+                elif source == "TIG":
+                    main_a = container.select_one('.list-title a, .tit a, .subject a')
+                elif source == "FETV":
+                    main_a = container.select_one('.tit a, .title a')
                 
+                if main_a:
+                    title = main_a.get_text(strip=True)
+                else:
+                    # 락온 태그를 못 찾았을 때, ZDNet만 '가장 긴 텍스트' 예비 로직 허용 (복구)
+                    if source == "ZDNet":
+                        for a in a_tags:
+                            t = a.get_text(strip=True)
+                            if len(t) > max(len(title), 12):
+                                title = t
+                                main_a = a
+                    else:
+                        continue # 나머지 매체는 락온 실패 시 무조건 버림 (메뉴/위젯 차단)
+                
+                if not main_a:
+                    continue
+
+                link = main_a['href']
                 if not link.startswith('http'): 
                     link = f"{urllib.parse.urlparse(url).scheme}://{urllib.parse.urlparse(url).netloc}{link}"
                 
@@ -342,7 +365,7 @@ def update_articles():
     save_db(final_db[:300])
     return final_db
 
-with st.spinner('14개 소스에서 기사 수집 중...'):
+with st.spinner('안정화된 엔진으로 기사 수집 중...'):
     live_data = update_articles()
 
 dom = [d for d in live_data if d['group'] == "domestic"]
@@ -388,4 +411,4 @@ draw_box(r3_c1, "전체 최신 기사", (dom+glo)[16:32])
 draw_box(r3_c2, "MTN 서정근 인사이트", mtn)
 
 st.markdown('<div class="mid-banner">실시간 게임 산업 인사이트 통합 그라운드</div>', unsafe_allow_html=True)
-st.markdown('<div class="version-marker">v122.0 (Strict Title/Link Lock-on & TIG Cloudflare Bypass)</div>', unsafe_allow_html=True)
+st.markdown('<div class="version-marker">v123.0 (Target Precision & Fix Regressions)</div>', unsafe_allow_html=True)
